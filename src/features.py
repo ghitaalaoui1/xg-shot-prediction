@@ -47,7 +47,6 @@ def compute_defenders_and_keeper(shots, freeze):
         frame = freeze[freeze['id'] == shot_id]
         opponents = frame[frame['teammate'] == False]
 
-        # Compter les adversaires dans le cone de tir (hors gardien)
         non_keeper_opponents = opponents[opponents['position_name'] != 'Goalkeeper']
         count = sum(
             _point_in_triangle((row['x'], row['y']), shot_point, v2, v3)
@@ -55,7 +54,6 @@ def compute_defenders_and_keeper(shots, freeze):
         )
         n_defenders.append(count)
 
-        # Distance au gardien adverse
         keeper = opponents[opponents['position_name'] == 'Goalkeeper']
         if len(keeper) > 0:
             kx, ky = keeper.iloc[0]['x'], keeper.iloc[0]['y']
@@ -79,7 +77,6 @@ def build_features():
     shots = compute_distance_angle(shots)
     shots = compute_defenders_and_keeper(shots, freeze)
 
-    # Selection des colonnes utiles (features + cible), on exclut shot_statsbomb_xg (fuite)
     keep_cols = [
         'is_goal', 'distance_to_goal', 'shot_angle', 'defenders_in_cone',
         'distance_to_keeper', 'under_pressure', 'shot_first_time',
@@ -87,14 +84,11 @@ def build_features():
     ]
     final_df = shots[keep_cols].copy()
 
-    # Valeurs manquantes : under_pressure/shot_first_time -> False par defaut (absence = non renseigne = faux)
     final_df['under_pressure'] = final_df['under_pressure'].fillna(False).astype(int)
     final_df['shot_first_time'] = final_df['shot_first_time'].fillna(False).astype(int)
 
-    # distance_to_keeper manquante -> on garde NaN pour l'instant, a traiter explicitement
     print(f"\nValeurs manquantes avant encodage :\n{final_df.isnull().sum()}")
 
-    # Encodage des variables categorielles
     final_df = pd.get_dummies(final_df, columns=['body_part_name', 'technique_name', 'play_pattern_name'], drop_first=True)
 
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
@@ -104,12 +98,5 @@ def build_features():
 
     return final_df
 
-
 if __name__ == "__main__":
     build_features()
-
-import pandas as pd
-
-df = pd.read_csv('data/processed/shots_features.csv')
-
-print(df.groupby('is_goal')[['distance_to_goal', 'shot_angle', 'defenders_in_cone', 'distance_to_keeper']].mean())
