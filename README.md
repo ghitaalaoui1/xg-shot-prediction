@@ -84,8 +84,7 @@ xg-shot-prediction/
 │   ├── raw/                    # Tirs et freeze frames extraits
 │   └── processed/              # Features finales
 ├── notebooks/
-│   ├── 01_eda.ipynb             # Analyse exploratoire
-│   └── 02_shap_explainability.ipynb
+│   ├── 01_edashap.ipynb             # Analyse exploratoire et SHAP 
 ├── src/
 │   ├── extract_data.py          # Extraction StatsBomb via mplsoccer
 │   ├── features.py               # Feature engineering geometrique
