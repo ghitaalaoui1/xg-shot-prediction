@@ -79,7 +79,10 @@ The features used are purely geometric (position of the shot, the keeper, the de
 
 ```
 xg-shot-prediction/
-├── api/                       # (upcoming)
+├── api/ 
+    ├──__pycache__/
+    ├──main.py
+    └──model.pkl                     
 ├── data/
 │   ├── raw/                    # Extracted shots and freeze frames
 │   └── processed/              # Final features
@@ -118,4 +121,4 @@ python src/train_knn.py
 
 ## Tech stack
 
-Python, Pandas, Scikit-learn, mplsoccer, SHAP, Matplotlib, Git
+Python, Pandas, Scikit-learn, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn,Git

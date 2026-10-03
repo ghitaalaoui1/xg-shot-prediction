@@ -1,4 +1,6 @@
 import os
+from xml.parsers.expat import model
+import joblib
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
@@ -69,7 +71,11 @@ def train_and_evaluate_rf(data_path):
     roc_path = os.path.join(BASE_DIR, "reports", "roc_curve_rf.png")
     plt.savefig(roc_path)
     print(f"\nCourbe ROC sauvegardee dans : {roc_path}")
+    import joblib
 
+# Sauvegarde du modele final pour l'API
+    joblib.dump(model, os.path.join(BASE_DIR, "api", "model.pkl"))
+    print(f"\nModele sauvegarde dans : {os.path.join(BASE_DIR, 'api', 'model.pkl')}")
 
 if __name__ == "__main__":
     train_and_evaluate_rf(FEATURES_PATH)

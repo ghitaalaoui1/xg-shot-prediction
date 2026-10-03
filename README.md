@@ -79,7 +79,10 @@ Les features utilisees sont purement geometriques (position du tir, du gardien, 
 
 ```
 xg-shot-prediction/
-├── api/                       # (a venir)
+├── api/
+    ├──__pycache__/
+    ├──main.py
+    └──model.pkl
 ├── data/
 │   ├── raw/                    # Tirs et freeze frames extraits
 │   └── processed/              # Features finales
@@ -113,8 +116,7 @@ python src/train_knn.py
 - Calibration des probabilites, pour que le score produit se rapproche d'un vrai pourcentage xG interpretable
 - Extension a d'autres competitions StatsBomb (Euro feminin 2022, Coupe du Monde feminine 2023) pour augmenter le volume de donnees
 - Exploration d'une version inspiree de TacticAI avec un reseau de neurones sur graphe (GNN), une fois les bases du deep learning acquises
-- API FastAPI pour un scoring en temps reel
 
 ## Stack technique
 
-Python, Pandas, Scikit-learn, mplsoccer, SHAP, Matplotlib, Git
+Python, Pandas, Scikit-learn, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn,Git
