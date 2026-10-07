@@ -4,7 +4,7 @@ End-to-end data science project: predicting the probability that a football shot
 
 ## Objective
 
-Build a complete pipeline, extraction, geometric feature engineering, modeling, interpretability, to estimate the goal probability of a shot, drawing on the principles behind professional xG models and DeepMind's TacticAI project.
+Build a complete pipeline, extraction, geometric feature engineering, modeling, interpretability, calibration, and a real-time scoring API, to estimate the goal probability of a shot, drawing on the principles behind professional xG models and DeepMind's TacticAI project.
 
 ## Dataset
 
@@ -28,7 +28,9 @@ data/raw/shots_worldcup2022.csv + freeze_worldcup2022.csv
 data/processed/shots_features.csv
       |
       v train_logistic.py / train_rf.py / train_knn.py
-reports/                     (ROC curves, SHAP plots)
+reports/                     (ROC curves, SHAP plots, calibration curve)
+      |
+      v api/main.py          (FastAPI real-time scoring endpoint)
 ```
 
 ## Feature engineering: the geometry of a shot
@@ -37,10 +39,12 @@ From the shot location and its associated freeze frame:
 
 | Feature | Calculation |
 |---|---|
-| `distance_to_goal` | Euclidean distance between the shot location and the center of the goal |
+| `distance_to_goal` | Euclidean distance between the shot location and the center of the goal (fixed point) |
 | `shot_angle` | Angle at which the shooter sees the width of the goal (trigonometry on both posts) |
 | `defenders_in_cone` | Number of outfield opponents inside the shooting cone (shooter, left post, right post) |
-| `distance_to_keeper` | Euclidean distance between the shooter and the opposing goalkeeper |
+| `distance_to_keeper` | Euclidean distance between the shooter and the opposing goalkeeper (variable position) |
+
+`distance_to_goal` and `distance_to_keeper` capture two complementary, non-redundant things: the first is always relative to a fixed point on the pitch, the second is relative to the keeper's actual position at the moment of the shot, which varies depending on whether he stayed on his line or rushed out to meet the shooter. It is in fact the single most important feature according to the SHAP ranking.
 
 The `shot_statsbomb_xg` column, provided by StatsBomb, was deliberately excluded from the features: it is already a prediction from another model, using it would have introduced a data leak of the same kind encountered in an earlier project (credit scoring).
 
@@ -71,6 +75,27 @@ Unlike the other two models, KNN has no `class_weight` parameter to compensate f
 
 A SHAP analysis was carried out on the Random Forest to explain individual predictions. The results confirm the ranking obtained via `feature_importances_` and the correlations from the exploratory analysis: `distance_to_keeper`, `shot_angle`, `distance_to_goal` and `defenders_in_cone` dominate the context variables by a wide margin.
 
+## Probability calibration
+
+A binary classifier like the Random Forest, especially one trained with `class_weight='balanced'` to compensate for class imbalance, produces probabilities that separate the two classes well (good ROC-AUC) but do not always reflect a true real-world frequency. An xG model should produce a score that is interpretable as a genuine percentage, not just a good ranking tool.
+
+The model was calibrated using `CalibratedClassifierCV` (sigmoid method, 5-fold cross-validation):
+
+| | Brier score | ROC-AUC |
+|---|---|---|
+| Before calibration | 0.1437 | 0.7906 |
+| After calibration | **0.0786** | 0.7952 |
+
+The Brier score, which measures the gap between predicted probabilities and actual outcomes (lower is better), is nearly cut in half after calibration, with no loss of ranking power, ROC-AUC even improves slightly. The calibration curve visually confirms that the uncalibrated model strongly overestimated its probabilities in the mid-to-high range, while the calibrated model closely tracks the perfect calibration diagonal.
+
+### Empirical check on an individual case
+
+For a test shot (distance to goal of 8, angle of 1.2, zero defenders, keeper 5 units away), the uncalibrated model predicted a 75.3% chance of scoring, a figure that seemed intuitively plausible at first glance. Rather than trusting that intuition, the 58 genuinely comparable shots in the dataset were isolated to check the actual observed conversion rate: 39.7%. The calibrated model, on that same case, predicts 37.45%, far closer to the real-world ground truth than the uncalibrated model was. This check confirms that calibration corrects a real overconfidence in the raw model rather than introducing an error.
+
+## Scoring API (FastAPI)
+
+The calibrated Random Forest model is exposed through a FastAPI application (`api/main.py`), with a `POST /predict` endpoint that takes a shot's geometric characteristics as input and returns the calibrated goal probability. FastAPI automatically generates interactive documentation at `/docs`, allowing the API to be tested without writing any code.
+
 ## Acknowledged limitation of the model
 
 The features used are purely geometric (position of the shot, the keeper, the defenders). The model captures nothing about the shooter's individual execution quality (shot power, accuracy, strong foot), a known limitation of public xG models, which have no access to biometric or shot-speed data.
@@ -79,23 +104,21 @@ The features used are purely geometric (position of the shot, the keeper, the de
 
 ```
 xg-shot-prediction/
-├── api/ 
-    ├──__pycache__/
-    ├──main.py
-    └──model.pkl                     
+├── api/
+│   ├── main.py                  # FastAPI scoring endpoint
+│   └── model.pkl                # Calibrated Random Forest, saved
 ├── data/
-│   ├── raw/                    # Extracted shots and freeze frames
-│   └── processed/              # Final features
+│   ├── raw/                     # Extracted shots and freeze frames
+│   └── processed/                # Final features
 ├── notebooks/
-│   ├── 01_eda.ipynb             # Exploratory data analysis
-│   └── 02_shap_explainability.ipynb
+│   └── 01_edashap.ipynb          # Exploratory analysis and SHAP interpretability
 ├── src/
-│   ├── extract_data.py          # StatsBomb extraction via mplsoccer
-│   ├── features.py               # Geometric feature engineering
+│   ├── extract_data.py           # StatsBomb extraction via mplsoccer
+│   ├── features.py                # Geometric feature engineering
 │   ├── train_logistic.py
-│   ├── train_rf.py
+│   ├── train_rf.py                # Random Forest, calibration, saving the model for the API
 │   └── train_knn.py
-├── reports/                    # ROC curves, SHAP plots
+├── reports/                      # ROC curves, SHAP plots, calibration curve
 ├── requirements.txt
 └── README.md
 ```
@@ -110,15 +133,17 @@ python src/features.py
 python src/train_logistic.py
 python src/train_rf.py
 python src/train_knn.py
+
+uvicorn api.main:app --reload
+# Interactive docs available at http://127.0.0.1:8000/docs
 ```
 
 ## Next steps
 
-- Probability calibration, so the output score approaches a genuinely interpretable xG percentage
+- Additional feature on the keeper's lateral positioning (keeper-to-trajectory angle), not just the raw distance
 - Extension to other StatsBomb competitions (Women's Euro 2022, Women's World Cup 2023) to increase data volume
 - Exploring a TacticAI-inspired version using a graph neural network (GNN), once the basics of deep learning are in place
-- FastAPI for real-time scoring
 
 ## Tech stack
 
-Python, Pandas, Scikit-learn, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn,Git
+Python, Pandas, Scikit-learn, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn, Git

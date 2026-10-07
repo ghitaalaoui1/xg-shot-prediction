@@ -4,7 +4,7 @@ Projet de data science de bout en bout : prediction de la probabilite qu'un tir 
 
 ## Objectif
 
-Construire un pipeline complet, extraction, feature engineering geometrique, modelisation, interpretabilite, pour estimer la probabilite de but d'un tir, en s'inspirant des principes derriere les modeles xG professionnels et le projet TacticAI de DeepMind.
+Construire un pipeline complet, extraction, feature engineering geometrique, modelisation, interpretabilite, calibration, et une API de scoring en temps reel, pour estimer la probabilite de but d'un tir, en s'inspirant des principes derriere les modeles xG professionnels et le projet TacticAI de DeepMind.
 
 ## Dataset
 
@@ -28,7 +28,9 @@ data/raw/shots_worldcup2022.csv + freeze_worldcup2022.csv
 data/processed/shots_features.csv
       |
       v train_logistic.py / train_rf.py / train_knn.py
-reports/                     (courbes ROC, graphiques SHAP)
+reports/                     (courbes ROC, graphiques SHAP, courbe de calibration)
+      |
+      v api/main.py          (API FastAPI de scoring en temps reel)
 ```
 
 ## Feature engineering : la geometrie du tir
@@ -37,10 +39,12 @@ A partir de la position du tir et du freeze frame associe :
 
 | Feature | Calcul |
 |---|---|
-| `distance_to_goal` | Distance euclidienne entre le point de tir et le centre du but |
+| `distance_to_goal` | Distance euclidienne entre le point de tir et le centre du but (point fixe) |
 | `shot_angle` | Angle sous lequel le tireur voit la largeur du but (trigonometrie sur les deux poteaux) |
 | `defenders_in_cone` | Nombre d'adversaires de champ a l'interieur du cone de tir (tireur, poteau gauche, poteau droit) |
-| `distance_to_keeper` | Distance euclidienne entre le tireur et le gardien adverse |
+| `distance_to_keeper` | Distance euclidienne entre le tireur et le gardien adverse (position variable) |
+
+`distance_to_goal` et `distance_to_keeper` mesurent deux choses complementaires et non redondantes : la premiere est toujours relative a un point fixe du terrain, la seconde est relative a la position reelle du gardien au moment du tir, qui varie selon qu'il est reste sur sa ligne ou qu'il est sorti a la rencontre du tireur. C'est d'ailleurs la feature la plus importante du modele d'apres le classement SHAP.
 
 La colonne `shot_statsbomb_xg`, fournie par StatsBomb, a volontairement ete exclue des features : c'est deja une prediction d'un autre modele, l'utiliser aurait constitue une fuite de donnees du meme type que celle rencontree sur un projet precedent (credit scoring).
 
@@ -71,6 +75,27 @@ Le KNN, contrairement aux deux autres modeles, n'a pas de parametre `class_weigh
 
 Une analyse SHAP a ete menee sur le Random Forest pour expliquer les predictions individuelles. Les resultats confirment le classement d'importance obtenu via `feature_importances_` et les correlations de l'analyse exploratoire : `distance_to_keeper`, `shot_angle`, `distance_to_goal` et `defenders_in_cone` dominent tres largement les variables de contexte.
 
+## Calibration des probabilites
+
+Un modele de classification binaire comme le Random Forest, surtout entraine avec `class_weight='balanced'` pour compenser le desequilibre des classes, produit des probabilites qui separent bien les deux classes (bon ROC-AUC) mais qui ne refletent pas toujours une vraie frequence reelle. Un modele xG doit justement produire un score interpretable comme un vrai pourcentage, pas seulement un bon outil de classement.
+
+Le modele a ete calibre avec `CalibratedClassifierCV` (methode sigmoide, validation croisee a 5 plis) :
+
+| | Brier score | ROC-AUC |
+|---|---|---|
+| Avant calibration | 0.1437 | 0.7906 |
+| Apres calibration | **0.0786** | 0.7952 |
+
+Le Brier score, qui mesure l'ecart entre les probabilites predites et les resultats reels (plus bas est meilleur), est quasiment divise par deux apres calibration, sans perte de pouvoir de classement (le ROC-AUC s'ameliore meme legerement). La courbe de calibration confirme visuellement que le modele non calibre surestimait fortement ses probabilites dans la zone moyenne a elevee, alors que le modele calibre suit de pres la diagonale de calibration parfaite.
+
+### Verification empirique sur un cas individuel
+
+Sur un tir test (distance au but de 8, angle de 1.2, zero defenseur, gardien a 5 unites), le modele non calibre predisait 75.3% de chance de but, un chiffre qui semblait intuitivement coherent au premier abord. Plutot que de faire confiance a cette intuition, les 58 tirs reellement comparables du dataset ont ete isoles pour verifier le vrai taux de conversion observe : 39.7%. Le modele calibre, sur ce meme cas, predit 37.45%, nettement plus proche de la realite terrain que le modele non calibre. Cette verification confirme que la calibration corrige une surconfiance reelle du modele brut plutot que d'introduire une erreur.
+
+## API de scoring (FastAPI)
+
+Le modele Random Forest calibre est expose via une API FastAPI (`api/main.py`), avec un endpoint `POST /predict` qui prend en entree les caracteristiques geometriques d'un tir et retourne la probabilite de but calibree. Une documentation interactive est generee automatiquement par FastAPI sur `/docs`, permettant de tester l'API sans ecrire de code.
+
 ## Limite assumee du modele
 
 Les features utilisees sont purement geometriques (position du tir, du gardien, des defenseurs). Le modele ne capture rien de la qualite d'execution individuelle du tireur (puissance de frappe, precision, pied fort), une limite connue des modeles xG publics qui n'ont pas acces a des donnees biometriques ou de vitesse de frappe.
@@ -80,21 +105,20 @@ Les features utilisees sont purement geometriques (position du tir, du gardien, 
 ```
 xg-shot-prediction/
 ├── api/
-    ├──__pycache__/
-    ├──main.py
-    └──model.pkl
+│   ├── main.py                  # API FastAPI de scoring
+│   └── model.pkl                # Random Forest calibre, sauvegarde
 ├── data/
-│   ├── raw/                    # Tirs et freeze frames extraits
-│   └── processed/              # Features finales
+│   ├── raw/                     # Tirs et freeze frames extraits
+│   └── processed/                # Features finales
 ├── notebooks/
-│   ├── 01_edashap.ipynb             # Analyse exploratoire et SHAP 
+│   └── 01_edashap.ipynb          # Analyse exploratoire et interpretabilite SHAP
 ├── src/
-│   ├── extract_data.py          # Extraction StatsBomb via mplsoccer
-│   ├── features.py               # Feature engineering geometrique
+│   ├── extract_data.py           # Extraction StatsBomb via mplsoccer
+│   ├── features.py                # Feature engineering geometrique
 │   ├── train_logistic.py
-│   ├── train_rf.py
+│   ├── train_rf.py                # Random Forest, calibration, sauvegarde du modele pour l'API
 │   └── train_knn.py
-├── reports/                    # Courbes ROC, graphiques SHAP
+├── reports/                      # Courbes ROC, graphiques SHAP, courbe de calibration
 ├── requirements.txt
 └── README.md
 ```
@@ -109,14 +133,17 @@ python src/features.py
 python src/train_logistic.py
 python src/train_rf.py
 python src/train_knn.py
+
+uvicorn api.main:app --reload
+# Documentation interactive disponible sur http://127.0.0.1:8000/docs
 ```
 
 ## Prochaines etapes
 
-- Calibration des probabilites, pour que le score produit se rapproche d'un vrai pourcentage xG interpretable
+- Feature additionnelle sur le positionnement lateral du gardien (angle gardien-trajectoire), pas seulement la distance brute
 - Extension a d'autres competitions StatsBomb (Euro feminin 2022, Coupe du Monde feminine 2023) pour augmenter le volume de donnees
 - Exploration d'une version inspiree de TacticAI avec un reseau de neurones sur graphe (GNN), une fois les bases du deep learning acquises
 
 ## Stack technique
 
-Python, Pandas, Scikit-learn, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn,Git
+Python, Pandas, Scikit-learn, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn, Git
