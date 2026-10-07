@@ -34,9 +34,23 @@ def _point_in_triangle(pt, v1, v2, v3):
     return not (has_neg and has_pos)
 
 
+def _keeper_lateral_offset(shot_point, keeper_point):
+    # Distance perpendiculaire entre le gardien et la bissectrice de l'angle de tir
+    # (ligne tireur -> milieu "angulaire" des deux poteaux), position theorique ideale du gardien.
+    # 0 = gardien parfaitement centre dans l'angle, valeur elevee = gardien decale lateralement.
+    sx, sy = shot_point
+    u1 = np.array([GOAL_X - sx, POST_Y1 - sy])
+    u2 = np.array([GOAL_X - sx, POST_Y2 - sy])
+    bisector = u1 / np.linalg.norm(u1) + u2 / np.linalg.norm(u2)
+    bisector /= np.linalg.norm(bisector)
+    kx, ky = keeper_point[0] - sx, keeper_point[1] - sy
+    return abs(bisector[0] * ky - bisector[1] * kx)
+
+
 def compute_defenders_and_keeper(shots, freeze):
     n_defenders = []
     dist_to_keeper = []
+    keeper_offset = []
 
     for _, shot in shots.iterrows():
         shot_id = shot['id']
@@ -58,13 +72,17 @@ def compute_defenders_and_keeper(shots, freeze):
         if len(keeper) > 0:
             kx, ky = keeper.iloc[0]['x'], keeper.iloc[0]['y']
             dist = np.sqrt((kx - shot['x'])**2 + (ky - shot['y'])**2)
+            offset = _keeper_lateral_offset(shot_point, (kx, ky))
         else:
             dist = np.nan
+            offset = np.nan
         dist_to_keeper.append(dist)
+        keeper_offset.append(offset)
 
     shots = shots.copy()
     shots['defenders_in_cone'] = n_defenders
     shots['distance_to_keeper'] = dist_to_keeper
+    shots['keeper_lateral_offset'] = keeper_offset
     return shots
 
 
@@ -79,7 +97,7 @@ def build_features():
 
     keep_cols = [
         'is_goal', 'distance_to_goal', 'shot_angle', 'defenders_in_cone',
-        'distance_to_keeper', 'under_pressure', 'shot_first_time',
+        'distance_to_keeper', 'keeper_lateral_offset', 'under_pressure', 'shot_first_time',
         'body_part_name', 'technique_name', 'play_pattern_name'
     ]
     final_df = shots[keep_cols].copy()

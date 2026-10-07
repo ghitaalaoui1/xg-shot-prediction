@@ -43,8 +43,11 @@ A partir de la position du tir et du freeze frame associe :
 | `shot_angle` | Angle sous lequel le tireur voit la largeur du but (trigonometrie sur les deux poteaux) |
 | `defenders_in_cone` | Nombre d'adversaires de champ a l'interieur du cone de tir (tireur, poteau gauche, poteau droit) |
 | `distance_to_keeper` | Distance euclidienne entre le tireur et le gardien adverse (position variable) |
+| `keeper_lateral_offset` | Distance perpendiculaire (en yards) entre le gardien et la bissectrice de l'angle de tir (tireur, poteau gauche, poteau droit) |
 
 `distance_to_goal` et `distance_to_keeper` mesurent deux choses complementaires et non redondantes : la premiere est toujours relative a un point fixe du terrain, la seconde est relative a la position reelle du gardien au moment du tir, qui varie selon qu'il est reste sur sa ligne ou qu'il est sorti a la rencontre du tireur. C'est d'ailleurs la feature la plus importante du modele d'apres le classement SHAP.
+
+`keeper_lateral_offset` complete `distance_to_keeper` sur l'axe lateral : deux gardiens a la meme distance du tireur peuvent etre l'un parfaitement centre dans l'angle, l'autre decale vers un poteau et laissant un cote du but ouvert. La bissectrice de l'angle de tir correspond a la position theorique ideale du gardien ; la feature mesure l'ecart a cette ligne (0 = gardien bien place). Sur les donnees, le decalage moyen est de 0.91 yard sur les buts contre 0.58 yard sur les tirs non convertis (correlation +0.14 avec la cible). L'effet est surtout non lineaire (il se concentre sur les gros decalages, gardien battu ou hors de position) : en validation croisee 5x5, la feature ameliore legerement le Random Forest (AUC 0.775 -> 0.778) mais reste neutre pour la regression logistique, et degrade le KNN (0.80 -> 0.75), qui conserve donc ses quatre features d'origine.
 
 La colonne `shot_statsbomb_xg`, fournie par StatsBomb, a volontairement ete exclue des features : c'est deja une prediction d'un autre modele, l'utiliser aurait constitue une fuite de donnees du meme type que celle rencontree sur un projet precedent (credit scoring).
 
@@ -61,13 +64,13 @@ Trois modeles ont ete entraines et compares sur le meme split train/test (80/20,
 
 | Modele | Features utilisees | ROC-AUC | Recall (but, seuil 0.5) |
 |---|---|---|---|
-| Regression Logistique | Toutes (23) | 0.788 | 0.67 |
-| Random Forest (tune) | Toutes (23) | 0.791 | 0.63 |
+| Regression Logistique | Toutes (24) | 0.785 | 0.67 |
+| Random Forest (tune) | Toutes (24) | 0.793 | 0.60 |
 | KNN | 4 features geometriques uniquement | 0.800 | 0.07 (0.33 a seuil 0.3) |
 
 ### Un choix methodologique assume pour le KNN
 
-Avec les 23 features (incluant les variables categorielles encodees), le KNN obtenait des resultats nettement plus faibles (AUC autour de 0.65), une illustration directe de la malediction de la dimensionnalite : la distance geometrique calculee par l'algorithme devient dominee par le bruit des colonnes categorielles rares plutot que par les variables realement pertinentes. En limitant le KNN aux quatre variables numeriques continues qui ont un vrai sens de distance, ses performances depassent celles des deux autres modeles en ROC-AUC. La regression logistique et le Random Forest, eux, tolerent bien les 23 features grace a leurs mecanismes internes differents (coefficients ponderes, separations successives).
+Avec les 24 features (incluant les variables categorielles encodees), le KNN obtenait des resultats nettement plus faibles (AUC autour de 0.65), une illustration directe de la malediction de la dimensionnalite : la distance geometrique calculee par l'algorithme devient dominee par le bruit des colonnes categorielles rares plutot que par les variables realement pertinentes. En limitant le KNN aux quatre variables numeriques continues qui ont un vrai sens de distance, ses performances depassent celles des deux autres modeles en ROC-AUC. La regression logistique et le Random Forest, eux, tolerent bien les 24 features grace a leurs mecanismes internes differents (coefficients ponderes, separations successives).
 
 Le KNN, contrairement aux deux autres modeles, n'a pas de parametre `class_weight` pour compenser le desequilibre des classes. A seuil de decision par defaut (0.5), son recall sur la classe but reste donc tres faible, meme s'il separe bien les deux classes en termes de probabilite (bon ROC-AUC). Abaisser le seuil de decision a 0.3 ameliore nettement ce recall, une illustration concrete que le choix du seuil de decision n'est pas neutre sur un probleme fortement desequilibre.
 
@@ -83,8 +86,8 @@ Le modele a ete calibre avec `CalibratedClassifierCV` (methode sigmoide, validat
 
 | | Brier score | ROC-AUC |
 |---|---|---|
-| Avant calibration | 0.1437 | 0.7906 |
-| Apres calibration | **0.0786** | 0.7952 |
+| Avant calibration | 0.1381 | 0.7934 |
+| Apres calibration | **0.0798** | 0.7948 |
 
 Le Brier score, qui mesure l'ecart entre les probabilites predites et les resultats reels (plus bas est meilleur), est quasiment divise par deux apres calibration, sans perte de pouvoir de classement (le ROC-AUC s'ameliore meme legerement). La courbe de calibration confirme visuellement que le modele non calibre surestimait fortement ses probabilites dans la zone moyenne a elevee, alors que le modele calibre suit de pres la diagonale de calibration parfaite.
 

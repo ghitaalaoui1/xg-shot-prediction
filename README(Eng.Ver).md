@@ -43,8 +43,11 @@ From the shot location and its associated freeze frame:
 | `shot_angle` | Angle at which the shooter sees the width of the goal (trigonometry on both posts) |
 | `defenders_in_cone` | Number of outfield opponents inside the shooting cone (shooter, left post, right post) |
 | `distance_to_keeper` | Euclidean distance between the shooter and the opposing goalkeeper (variable position) |
+| `keeper_lateral_offset` | Perpendicular distance (in yards) between the goalkeeper and the bisector of the shooting angle (shooter, left post, right post) |
 
 `distance_to_goal` and `distance_to_keeper` capture two complementary, non-redundant things: the first is always relative to a fixed point on the pitch, the second is relative to the keeper's actual position at the moment of the shot, which varies depending on whether he stayed on his line or rushed out to meet the shooter. It is in fact the single most important feature according to the SHAP ranking.
+
+`keeper_lateral_offset` complements `distance_to_keeper` along the lateral axis: two keepers at the same distance from the shooter can be either perfectly centred in the shooting angle, or shifted towards one post and leaving one side of the goal open. The bisector of the shooting angle is the keeper's theoretical optimal position; the feature measures the deviation from that line (0 = well positioned). In the data, the mean offset is 0.91 yards on goals versus 0.58 yards on non-goals (correlation +0.14 with the target). The effect is mostly non-linear (concentrated on large offsets, keeper beaten or out of position): under 5x5 cross-validation the feature slightly improves the Random Forest (AUC 0.775 -> 0.778), is neutral for logistic regression, and hurts KNN (0.80 -> 0.75), which therefore keeps its original four features.
 
 The `shot_statsbomb_xg` column, provided by StatsBomb, was deliberately excluded from the features: it is already a prediction from another model, using it would have introduced a data leak of the same kind encountered in an earlier project (credit scoring).
 
@@ -61,13 +64,13 @@ Three models were trained and compared on the same train/test split (80/20, stra
 
 | Model | Features used | ROC-AUC | Recall (goal, threshold 0.5) |
 |---|---|---|---|
-| Logistic Regression | All (23) | 0.788 | 0.67 |
-| Random Forest (tuned) | All (23) | 0.791 | 0.63 |
+| Logistic Regression | All (24) | 0.785 | 0.67 |
+| Random Forest (tuned) | All (24) | 0.793 | 0.60 |
 | KNN | 4 geometric features only | 0.800 | 0.07 (0.33 at threshold 0.3) |
 
 ### A deliberate methodological choice for KNN
 
-With all 23 features (including the encoded categorical variables), KNN produced noticeably weaker results (AUC around 0.65), a direct illustration of the curse of dimensionality: the geometric distance computed by the algorithm ends up dominated by noise from sparse categorical columns rather than by the variables that actually matter. By restricting KNN to the four continuous numerical variables with a genuine notion of distance, its performance surpasses the other two models on ROC-AUC. Logistic regression and Random Forest, by contrast, handle the full 23 features well thanks to their different internal mechanisms (weighted coefficients, successive splits).
+With all 24 features (including the encoded categorical variables), KNN produced noticeably weaker results (AUC around 0.65), a direct illustration of the curse of dimensionality: the geometric distance computed by the algorithm ends up dominated by noise from sparse categorical columns rather than by the variables that actually matter. By restricting KNN to the four continuous numerical variables with a genuine notion of distance, its performance surpasses the other two models on ROC-AUC. Logistic regression and Random Forest, by contrast, handle the full 24 features well thanks to their different internal mechanisms (weighted coefficients, successive splits).
 
 Unlike the other two models, KNN has no `class_weight` parameter to compensate for class imbalance. At the default decision threshold (0.5), its recall on the goal class therefore remains very low, even though it separates the two classes well in terms of probability (good ROC-AUC). Lowering the decision threshold to 0.3 noticeably improves this recall, a concrete illustration that the choice of decision threshold is not neutral on a heavily imbalanced problem.
 
@@ -83,8 +86,8 @@ The model was calibrated using `CalibratedClassifierCV` (sigmoid method, 5-fold 
 
 | | Brier score | ROC-AUC |
 |---|---|---|
-| Before calibration | 0.1437 | 0.7906 |
-| After calibration | **0.0786** | 0.7952 |
+| Before calibration | 0.1381 | 0.7934 |
+| After calibration | **0.0798** | 0.7948 |
 
 The Brier score, which measures the gap between predicted probabilities and actual outcomes (lower is better), is nearly cut in half after calibration, with no loss of ranking power, ROC-AUC even improves slightly. The calibration curve visually confirms that the uncalibrated model strongly overestimated its probabilities in the mid-to-high range, while the calibrated model closely tracks the perfect calibration diagonal.
 

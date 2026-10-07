@@ -27,6 +27,7 @@ def train_and_evaluate_knn(data_path):
 # KNN souffre de la malediction de la dimensionnalite sur des features categorielles encodees.
 # On ne garde que les 4 variables numeriques continues avec un vrai sens geometrique de distance,
 # contrairement a la regression logistique et au Random Forest qui utilisent toutes les features.
+# keeper_lateral_offset a ete teste en 5e feature mais degrade l'AUC du KNN (0.80 -> 0.75) : non retenue ici.
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
