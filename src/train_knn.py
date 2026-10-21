@@ -1,7 +1,8 @@
 import os
+import joblib
 import pandas as pd
+from split import load_splits
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import classification_report, roc_auc_score, roc_curve, confusion_matrix
@@ -22,15 +23,13 @@ def train_and_evaluate_knn(data_path):
 
     # Memes features que pour la regression logistique et le Random Forest (comparaison equitable)
     features_to_use = ['distance_to_goal', 'shot_angle', 'defenders_in_cone', 'distance_to_keeper']
-    X = df[features_to_use]
-    y = df[target_column]
 # KNN souffre de la malediction de la dimensionnalite sur des features categorielles encodees.
 # On ne garde que les 4 variables numeriques continues avec un vrai sens geometrique de distance,
 # contrairement a la regression logistique et au Random Forest qui utilisent toutes les features.
 # keeper_lateral_offset a ete teste en 5e feature mais degrade l'AUC du KNN (0.80 -> 0.75) : non retenue ici.
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
+    train, test, holdout = load_splits(df)
+    X_train, y_train = train[features_to_use], train[target_column]
+    X_test, y_test = test[features_to_use], test[target_column]
 
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
@@ -79,6 +78,13 @@ def train_and_evaluate_knn(data_path):
     roc_path = os.path.join(BASE_DIR, "reports", "roc_curve_knn.png")
     plt.savefig(roc_path)
     print(f"\nCourbe ROC sauvegardee dans : {roc_path}")
+
+    # Sauvegarde du modele avec ses metadonnees
+    artifact = {"model": model, "features": features_to_use, "scaler": scaler}
+    os.makedirs(os.path.join(BASE_DIR, "models"), exist_ok=True)
+    path = os.path.join(BASE_DIR, "models", "knn.pkl")
+    joblib.dump(artifact, path)
+    print(f"\nModele sauvegarde dans : {path}")
 
 
 if __name__ == "__main__":

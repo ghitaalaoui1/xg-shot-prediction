@@ -1,7 +1,9 @@
 import os
+import joblib
 import pandas as pd
+from features import FEATURES
+from split import load_splits
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, roc_auc_score, roc_curve
@@ -20,19 +22,16 @@ def train_and_evaluate_model(data_path):
 
     target_column = "is_goal"
 
-    X = df.drop(columns=[target_column])
-    y = df[target_column]
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
+    train, test, holdout = load_splits(df)
+    X_train, y_train = train[FEATURES], train[target_column]
+    X_test, y_test = test[FEATURES], test[target_column]
 
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
     print("\nEntrainement de la Regression Logistique...")
-    model = LogisticRegression(max_iter=5000, random_state=42, class_weight="balanced")
+    model = LogisticRegression(max_iter=5000, random_state=42)
     model.fit(X_train_scaled, y_train)
 
     y_pred = model.predict(X_test_scaled)
@@ -71,6 +70,13 @@ def train_and_evaluate_model(data_path):
 
     auc_score = roc_auc_score(y_test, y_prob)
     print(f"Score AUC-ROC : {auc_score:.4f}")
+
+    # Sauvegarde du modele avec ses metadonnees
+    artifact = {"model": model, "features": FEATURES, "scaler": scaler}
+    os.makedirs(os.path.join(BASE_DIR, "models"), exist_ok=True)
+    path = os.path.join(BASE_DIR, "models", "logistic.pkl")
+    joblib.dump(artifact, path)
+    print(f"\nModele sauvegarde dans : {path}")
 
 if __name__ == "__main__":
     train_and_evaluate_model(FEATURES_PATH)
