@@ -97,7 +97,7 @@ Les trois scripts d'entrainement (et le notebook) obtiennent leurs donnees par u
 | Holdout | Euro 2024, en entier | 51 | 1304 | 7.5% |
 
 - **Decoupage par match** : tous les tirs d'un meme match sont du meme cote. Un decoupage tir par tir laisserait des tirs d'un meme match (memes equipes, memes gardiens, meme contexte) a la fois dans le train et le test, et gonflerait les scores.
-- **Holdout par competition** : l'Euro 2024 est entierement mis de cote, pour mesurer la generalisation a une competition jamais vue. Il n'est pas encore utilise pour l'evaluation.
+- **Holdout par competition** : l'Euro 2024 est entierement mis de cote, pour mesurer la generalisation a une competition jamais vue. Il n'est utilise que par le benchmark, jamais pour entrainer ou regler un modele.
 
 ### Resultats
 
@@ -119,7 +119,7 @@ Le script KNN affiche aussi les resultats a un seuil de decision abaisse a 0.3 :
 
 ## Interpretabilite (SHAP)
 
-Une analyse SHAP (`notebooks/01_edashap.ipynb`) explique les predictions individuelles du Random Forest. Le notebook ne reentraine aucun modele : il charge `models/rf_calibrated.pkl`, celui-la meme que `train_rf.py` sauvegarde et que l'API sert. Une seule source de verite : le script entraine et sauvegarde, le notebook explique, l'API sert.
+Une analyse SHAP (`notebooks/01_edashap.ipynb`) explique les predictions individuelles du Random Forest. Le notebook ne reentraine aucun modele : il charge `models/rf_calibrated.pkl`, celui-la meme que `train_rf.py` sauvegarde. Une seule source de verite : le script entraine et sauvegarde, le notebook explique.
 
 Ce modele est un `CalibratedClassifierCV`, c'est-a-dire 5 Random Forest (un par pli de validation croisee) suivis d'une sigmoide de calibration. `TreeExplainer` ne sait pas lire la calibration : les valeurs SHAP sont calculees sur chacun des 5 Random Forest internes, puis moyennees. Elles expliquent donc le score avant la sigmoide, qui est monotone et ne change pas le sens de lecture.
 
@@ -164,7 +164,7 @@ Sur un tir test (distance au but de 8, angle de 1.2, zero defenseur, gardien a 5
 
 ## Benchmark : comparaison avec le xG StatsBomb
 
-`src/benchmark.py` charge les modeles sauvegardes dans `models/` et les compare, sur le meme jeu de test, a deux references : une constante (le taux de but du train) et le xG calcule par StatsBomb (`shot_statsbomb_xg`). Cette colonne est conservee dans `shots_features.csv` uniquement comme reference (`REFERENCE_COLUMNS`) : c'est la prediction d'un autre modele, elle n'entre jamais dans `X`.
+`src/benchmark.py` charge les modeles sauvegardes dans `models/` et les compare, sur le jeu de test puis sur le holdout, a deux references : une constante (le taux de but du train) et le xG calcule par StatsBomb (`shot_statsbomb_xg`). Cette colonne est conservee dans `shots_features.csv` uniquement comme reference (`REFERENCE_COLUMNS`) : c'est la prediction d'un autre modele, elle n'entre jamais dans `X`.
 
 | Modele | ROC-AUC | Brier | LogLoss |
 |---|---|---|---|
@@ -186,15 +186,29 @@ Le Random Forest capture 68% de l'amelioration que StatsBomb obtient sur la refe
 
 L'ecart restant (AUC 0.828 contre 0.792) ne vient donc pas de la partie du corps, de la technique ou de la pression, que nos modeles connaissent deja. Il vient d'informations presentes dans les donnees brutes StatsBomb mais pas encore exploitees, listees dans les prochaines etapes.
 
-A noter : sur ce benchmark, la regression logistique fait mieux que le Random Forest sur les trois metriques, alors que c'est le Random Forest que sert l'API.
+A noter : sur ce benchmark, la regression logistique fait mieux que le Random Forest sur les trois metriques, et resiste mieux sur le holdout Euro 2024. C'est donc elle que sert l'API.
 
 ### Le cas du KNN : bon classement, probabilites inutilisables
 
 Le KNN atteint une AUC de 0.739 : il classe correctement les tirs. Mais son LogLoss de 0.86 est pire que celui d'une simple constante (0.34). Sa probabilite est la proportion de buts parmi les 15 plus proches voisins : quand aucun d'eux n'est un but, elle vaut exactement 0. C'est le cas de 826 tirs du test sur 2123, dont 37 sont pourtant des buts. Un but predit a 0% coute une penalite quasi infinie en LogLoss. Le Brier, qui borne la penalite a 1 par tir, le masque en grande partie. Les probabilites du KNN ne sont donc pas utilisables comme xG.
 
+### Holdout Euro 2024 : une competition jamais vue
+
+Le meme benchmark, sur les 1304 tirs de l'Euro 2024 (taux de but reel 7.5%) :
+
+| Modele | ROC-AUC | Brier | LogLoss | xG moyen |
+|---|---|---|---|---|
+| Constante (taux de but du train) | - | 0.0702 | 0.2706 | 0.101 |
+| **xG StatsBomb** | **0.787** | **0.0615** | **0.2251** | 0.085 |
+| Regression logistique | 0.766 | 0.0635 | 0.2330 | 0.087 |
+| Random Forest calibre | 0.737 | 0.0652 | 0.2426 | 0.090 |
+| KNN | 0.634 | 0.0732 | 0.8841 | 0.085 |
+
+Sur l'Euro 2024, 98 buts ont ete marques pour 111 attendus selon le xG StatsBomb. L'ecart represente 1.4 ecart-type et n'est donc pas significatif. C'est d'ailleurs une propriete connue du xG : sur un seul tournoi, la reussite devant le but varie beaucoup, et c'est precisement ce qui rend le xG utile sur une saison plutot que sur un match.
+
 ## API de scoring (FastAPI)
 
-Le modele Random Forest calibre est expose via une API FastAPI (`api/main.py`), avec un endpoint `POST /predict` qui prend en entree les caracteristiques geometriques d'un tir et retourne la probabilite de but calibree. Une documentation interactive est generee automatiquement par FastAPI sur `/docs`, permettant de tester l'API sans ecrire de code.
+La regression logistique est exposee via une API FastAPI (`api/main.py`), avec un endpoint `POST /predict` qui prend en entree les caracteristiques geometriques d'un tir et retourne la probabilite de but. C'est le meilleur des trois modeles sur le test comme sur le holdout, et ses probabilites sont deja fideles sans calibration (xG moyen de 0.100 sur le test pour un taux de but du train de 0.101). Une documentation interactive est generee automatiquement par FastAPI sur `/docs`, permettant de tester l'API sans ecrire de code.
 
 ## Limite assumee du modele
 
@@ -207,8 +221,8 @@ xg-shot-prediction/
 ├── api/
 │   └── main.py                  # API FastAPI de scoring
 ├── models/
-│   ├── rf_calibrated.pkl        # Random Forest calibre (servi par l'API, explique par le notebook)
-│   ├── logistic.pkl             # Regression logistique + scaler (non versionne)
+│   ├── rf_calibrated.pkl        # Random Forest calibre (explique par le notebook)
+│   ├── logistic.pkl             # Regression logistique + scaler (servi par l'API)
 │   └── knn.pkl                  # KNN + scaler (non versionne)
 ├── data/
 │   ├── raw/                     # Tirs et freeze frames extraits
@@ -220,8 +234,8 @@ xg-shot-prediction/
 │   ├── extract_data.py           # Extraction StatsBomb via mplsoccer
 │   ├── features.py                # Feature engineering geometrique, listes FEATURES et ID_COLUMNS
 │   ├── split.py                   # Decoupage train / test / holdout, commun a tous les scripts
-│   ├── train_logistic.py
-│   ├── train_rf.py                # Random Forest, calibration, sauvegarde du modele pour l'API
+│   ├── train_logistic.py          # Regression logistique, sauvegarde du modele pour l'API
+│   ├── train_rf.py                # Random Forest, calibration, sauvegarde du modele pour le notebook
 │   ├── train_knn.py
 │   └── benchmark.py               # Comparaison des modeles sauvegardes et du xG StatsBomb
 ├── reports/                      # Courbes ROC, graphiques SHAP, courbe de calibration
@@ -247,7 +261,6 @@ uvicorn api.main:app --reload
 
 ## Prochaines etapes
 
-- Evaluation finale des trois modeles sur le holdout Euro 2024
 - Exploiter les informations presentes dans les donnees brutes StatsBomb mais pas encore utilisees, candidates pour expliquer l'ecart avec leur xG :
   - la passe decisive : centre (`pass_cross`), passe en retrait (`pass_cut_back`), hauteur de la passe (`pass_height_name`), via `shot_key_pass_id`
   - le contexte du tir annote par StatsBomb : face-a-face avec le gardien (`shot_one_on_one`), but vide (`shot_open_goal`), tir apres un dribble (`shot_follows_dribble`), duel aerien gagne (`aerial_won`)

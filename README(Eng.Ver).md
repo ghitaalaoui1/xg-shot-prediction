@@ -97,7 +97,7 @@ The three training scripts (and the notebook) get their data from a single call 
 | Holdout | Euro 2024, in full | 51 | 1304 | 7.5% |
 
 - **Split by match**: all shots from a given match land on the same side. A shot-by-shot split would leave shots from the same match (same teams, same keepers, same context) in both train and test, and inflate the scores.
-- **Holdout by competition**: Euro 2024 is set aside entirely, to measure generalisation to a competition the models have never seen. It is not used for evaluation yet.
+- **Holdout by competition**: Euro 2024 is set aside entirely, to measure generalisation to a competition the models have never seen. It is used only by the benchmark, never to train or tune a model.
 
 ### Results
 
@@ -119,7 +119,7 @@ The KNN script also reports results at a decision threshold lowered to 0.3: reca
 
 ## Interpretability (SHAP)
 
-A SHAP analysis (`notebooks/01_edashap.ipynb`) explains the Random Forest's individual predictions. The notebook does not retrain any model: it loads `models/rf_calibrated.pkl`, the very model that `train_rf.py` saves and the API serves. A single source of truth: the script trains and saves, the notebook explains, the API serves.
+A SHAP analysis (`notebooks/01_edashap.ipynb`) explains the Random Forest's individual predictions. The notebook does not retrain any model: it loads `models/rf_calibrated.pkl`, the very model that `train_rf.py` saves. A single source of truth: the script trains and saves, the notebook explains.
 
 This model is a `CalibratedClassifierCV`, i.e. 5 Random Forests (one per cross-validation fold) followed by a sigmoid calibration. `TreeExplainer` cannot read the calibration step: SHAP values are computed on each of the 5 internal Random Forests, then averaged. They therefore explain the score before the sigmoid, which is monotonic and does not change how they read.
 
@@ -164,7 +164,7 @@ For a test shot (distance to goal of 8, angle of 1.2, zero defenders, keeper 5 u
 
 ## Benchmark: comparison with StatsBomb xG
 
-`src/benchmark.py` loads the models saved in `models/` and compares them, on the same test set, against two references: a constant (the training goal rate) and the xG computed by StatsBomb (`shot_statsbomb_xg`). That column is kept in `shots_features.csv` only as a reference (`REFERENCE_COLUMNS`): it is another model's prediction and never enters `X`.
+`src/benchmark.py` loads the models saved in `models/` and compares them, on the test set and then on the holdout, against two references: a constant (the training goal rate) and the xG computed by StatsBomb (`shot_statsbomb_xg`). That column is kept in `shots_features.csv` only as a reference (`REFERENCE_COLUMNS`): it is another model's prediction and never enters `X`.
 
 | Model | ROC-AUC | Brier | LogLoss |
 |---|---|---|---|
@@ -186,15 +186,29 @@ The Random Forest captures 68% of the improvement StatsBomb achieves over the tr
 
 The remaining gap (AUC 0.828 versus 0.792) therefore does not come from body part, technique or pressure, which our models already know. It comes from information present in the raw StatsBomb data but not yet used, listed in the next steps.
 
-Note: on this benchmark, logistic regression beats the Random Forest on all three metrics, even though the Random Forest is the model served by the API.
+Note: on this benchmark, logistic regression beats the Random Forest on all three metrics, and holds up better on the Euro 2024 holdout. It is therefore the model served by the API.
 
 ### The KNN case: good ranking, unusable probabilities
 
 KNN reaches an AUC of 0.739: it ranks shots correctly. But its LogLoss of 0.86 is worse than a plain constant (0.34). Its probability is the share of goals among the 15 nearest neighbours: when none of them is a goal, it is exactly 0. That is the case for 826 of the 2123 test shots, 37 of which are actually goals. A goal predicted at 0% incurs a near-infinite LogLoss penalty. The Brier score, which caps the penalty at 1 per shot, largely hides this. KNN's probabilities are therefore not usable as xG.
 
+### Euro 2024 holdout: a competition never seen before
+
+The same benchmark, on the 1304 Euro 2024 shots (actual goal rate 7.5%):
+
+| Model | ROC-AUC | Brier | LogLoss | Mean xG |
+|---|---|---|---|---|
+| Constant (training goal rate) | - | 0.0702 | 0.2706 | 0.101 |
+| **StatsBomb xG** | **0.787** | **0.0615** | **0.2251** | 0.085 |
+| Logistic regression | 0.766 | 0.0635 | 0.2330 | 0.087 |
+| Calibrated Random Forest | 0.737 | 0.0652 | 0.2426 | 0.090 |
+| KNN | 0.634 | 0.0732 | 0.8841 | 0.085 |
+
+At Euro 2024, 98 goals were scored against 111 expected according to StatsBomb xG. The gap amounts to 1.4 standard deviations and is therefore not significant. This is in fact a well-known property of xG: over a single tournament, finishing varies a lot, which is precisely what makes xG useful over a season rather than over a single match.
+
 ## Scoring API (FastAPI)
 
-The calibrated Random Forest model is exposed through a FastAPI application (`api/main.py`), with a `POST /predict` endpoint that takes a shot's geometric characteristics as input and returns the calibrated goal probability. FastAPI automatically generates interactive documentation at `/docs`, allowing the API to be tested without writing any code.
+Logistic regression is exposed through a FastAPI application (`api/main.py`), with a `POST /predict` endpoint that takes a shot's geometric characteristics as input and returns the goal probability. It is the best of the three models on both the test set and the holdout, and its probabilities are already faithful without calibration (mean xG of 0.100 on the test set against a training goal rate of 0.101). FastAPI automatically generates interactive documentation at `/docs`, allowing the API to be tested without writing any code.
 
 ## Acknowledged limitation of the model
 
@@ -207,8 +221,8 @@ xg-shot-prediction/
 ├── api/
 │   └── main.py                  # FastAPI scoring endpoint
 ├── models/
-│   ├── rf_calibrated.pkl        # Calibrated Random Forest (served by the API, explained by the notebook)
-│   ├── logistic.pkl             # Logistic regression + scaler (not versioned)
+│   ├── rf_calibrated.pkl        # Calibrated Random Forest (explained by the notebook)
+│   ├── logistic.pkl             # Logistic regression + scaler (served by the API)
 │   └── knn.pkl                  # KNN + scaler (not versioned)
 ├── data/
 │   ├── raw/                     # Extracted shots and freeze frames
@@ -220,8 +234,8 @@ xg-shot-prediction/
 │   ├── extract_data.py           # StatsBomb extraction via mplsoccer
 │   ├── features.py                # Geometric feature engineering, FEATURES and ID_COLUMNS lists
 │   ├── split.py                   # Train / test / holdout split, shared by every script
-│   ├── train_logistic.py
-│   ├── train_rf.py                # Random Forest, calibration, saving the model for the API
+│   ├── train_logistic.py          # Logistic regression, saving the model for the API
+│   ├── train_rf.py                # Random Forest, calibration, saving the model for the notebook
 │   ├── train_knn.py
 │   └── benchmark.py               # Comparison of saved models and StatsBomb xG
 ├── reports/                      # ROC curves, SHAP plots, calibration curve
@@ -247,7 +261,6 @@ uvicorn api.main:app --reload
 
 ## Next steps
 
-- Final evaluation of the three models on the Euro 2024 holdout
 - Use information present in the raw StatsBomb data but not yet exploited, candidates to explain the gap with their xG:
   - the key pass: cross (`pass_cross`), cut-back (`pass_cut_back`), pass height (`pass_height_name`), via `shot_key_pass_id`
   - shot context annotated by StatsBomb: one-on-one with the keeper (`shot_one_on_one`), open goal (`shot_open_goal`), shot after a dribble (`shot_follows_dribble`), aerial duel won (`aerial_won`)

@@ -5,10 +5,11 @@ import pandas as pd
 import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "models", "rf_calibrated.pkl")
+MODEL_PATH = os.path.join(BASE_DIR, "models", "logistic.pkl")
 
 artifact = joblib.load(MODEL_PATH)
 model = artifact["model"]
+scaler = artifact["scaler"]
 FEATURES = artifact["features"]
 
 app = FastAPI(title="xG Shot Prediction API")
@@ -70,7 +71,9 @@ def predict(data: ShotData):
         "play_pattern_name_Regular Play": data.play_pattern_name_Regular_Play,
     }])
 
-    probability = model.predict_proba(input_df)[0][1]
+    # Le scaler a ete ajuste sur les colonnes dans l'ordre de FEATURES
+    X = scaler.transform(input_df[FEATURES])
+    probability = model.predict_proba(X)[0][1]
 
     return {
         "probabilite_de_but": round(float(probability), 4)
