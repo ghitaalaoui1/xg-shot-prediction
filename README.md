@@ -47,7 +47,7 @@ data/processed/shots_features.csv
       v split.py            (decoupage train / test / holdout, commun a tous les scripts)
       |
       v train_logistic.py / train_rf.py / train_knn.py
-reports/                     (courbes ROC, graphiques SHAP, courbe de calibration)
+reports/                     (courbes ROC, coefficients, graphiques SHAP, courbe de calibration)
       |
       v api/main.py          (API FastAPI de scoring en temps reel)
 ```
@@ -64,7 +64,7 @@ A partir de la position du tir et du freeze frame associe :
 | `distance_to_keeper` | Distance euclidienne entre le tireur et le gardien adverse (position variable) |
 | `keeper_lateral_offset` | Distance perpendiculaire (en yards) entre le gardien et la bissectrice de l'angle de tir (tireur, poteau gauche, poteau droit) |
 
-`distance_to_goal` et `distance_to_keeper` mesurent deux choses complementaires et non redondantes : la premiere est toujours relative a un point fixe du terrain, la seconde est relative a la position reelle du gardien au moment du tir, qui varie selon qu'il est reste sur sa ligne ou qu'il est sorti a la rencontre du tireur. C'est d'ailleurs la feature la plus importante du modele d'apres le classement SHAP.
+`distance_to_goal` et `distance_to_keeper` mesurent deux choses complementaires : la premiere est toujours relative a un point fixe du terrain, la seconde est relative a la position reelle du gardien au moment du tir, qui varie selon qu'il est reste sur sa ligne ou qu'il est sorti a la rencontre du tireur. C'est d'ailleurs la feature la plus importante, pour la regression logistique comme pour le Random Forest. Les deux distances restent toutefois tres correlees (0.96), ce qui rend leurs coefficients difficiles a separer dans un modele lineaire (voir Interpretabilite).
 
 `keeper_lateral_offset` complete `distance_to_keeper` sur l'axe lateral : deux gardiens a la meme distance du tireur peuvent etre l'un parfaitement centre dans l'angle, l'autre decale vers un poteau et laissant un cote du but ouvert. La bissectrice de l'angle de tir correspond a la position theorique ideale du gardien ; la feature mesure l'ecart a cette ligne (0 = gardien bien place). Sur les donnees, le decalage moyen est de 1.08 yard sur les buts contre 0.60 yard sur les tirs non convertis (correlation +0.15 avec la cible). L'effet est surtout non lineaire (il se concentre sur les gros decalages, gardien battu ou hors de position) : lors de son ajout (validation croisee 5x5, sur la seule Coupe du Monde 2022), la feature ameliorait legerement le Random Forest (AUC 0.775 -> 0.778), restait neutre pour la regression logistique et degradait le KNN (0.80 -> 0.75), qui conserve donc ses quatre features d'origine.
 
@@ -117,13 +117,49 @@ Avec les 24 features (incluant les variables categorielles encodees), le KNN obt
 
 Le script KNN affiche aussi les resultats a un seuil de decision abaisse a 0.3 : le recall sur la classe but passe de 0.11 a 0.27, une illustration concrete que le choix du seuil de decision n'est pas neutre sur un probleme fortement desequilibre.
 
-## Interpretabilite (SHAP)
+## Interpretabilite
 
-Une analyse SHAP (`notebooks/01_edashap.ipynb`) explique les predictions individuelles du Random Forest. Le notebook ne reentraine aucun modele : il charge `models/rf_calibrated.pkl`, celui-la meme que `train_rf.py` sauvegarde. Une seule source de verite : le script entraine et sauvegarde, le notebook explique.
+Le notebook `notebooks/01_edashap.ipynb` ne reentraine aucun modele : il charge ceux que les scripts sauvegardent dans `models/`. Une seule source de verite : le script entraine et sauvegarde, le notebook explique.
+
+### Le modele servi : les coefficients de la regression logistique
+
+Les features etant standardisees, les coefficients sont directement comparables entre eux. Un coefficient de +0.4 signifie qu'un ecart-type de plus sur la variable multiplie la cote de marquer par e^0.4, soit environ 1.5. Le signe donne le sens, la valeur absolue l'importance relative (graphique complet : `reports/logistic_coefficients.png`).
+
+| Feature | Coefficient | Effet d'un ecart-type de plus sur la cote |
+|---|---|---|
+| `distance_to_keeper` | -0.73 | x 0.48 |
+| `shot_angle` | +0.52 | x 1.68 |
+| `defenders_in_cone` | -0.26 | x 0.77 |
+| `keeper_lateral_offset` | +0.25 | x 1.28 |
+| `distance_to_goal` | -0.01 | x 0.99 |
+
+Les signes ont un sens footballistique : plus le gardien est loin et plus il y a de defenseurs dans le cone, moins le tir a de chances, plus l'angle est ouvert et plus le gardien est decale, plus il en a. Les indicatrices se lisent contre la categorie retiree a l'encodage : un tir du pied (+0.63) convertit mieux qu'une tete, une frappe normale (+0.60) mieux qu'une talonnade.
+
+Le cas surprenant est `distance_to_goal`, quasi nulle. Son coefficient change selon les variables qui l'accompagnent :
+
+| Variables du modele | Coefficient de `distance_to_goal` |
+|---|---|
+| `distance_to_goal` seule | -0.99 |
+| + `distance_to_keeper` | -0.17 |
+| + `shot_angle` | **+0.80** |
+| les 24 features | -0.01 |
+
+Le signe s'inverse meme : c'est de la colinearite. `distance_to_goal` est correlee a 0.96 avec `distance_to_keeper` et a -0.75 avec `shot_angle`. Le gardien se tenant en general pres de son but, et l'angle se refermant quand on s'eloigne, ces trois variables portent en grande partie la meme information, que le modele lineaire ne peut pas departager. Le coefficient individuel de `distance_to_goal` n'est donc pas interpretable, seul compte l'effet combine des trois : il ne faut pas en conclure que la distance au but est inutile.
+
+### Les deux familles de modeles voient-elles la meme chose ?
+
+Le Random Forest n'est plus le modele servi, mais il reste un point de comparaison precieux. Un modele lineaire et un modele d'arbres apprennent de facons tres differentes : s'ils hierarchisent les variables de la meme facon, ce classement ne tient pas aux choix d'un algorithme particulier. Le Random Forest (`models/rf_calibrated.pkl`) est explique avec SHAP, puis son classement des variables est compare a celui des coefficients de la regression logistique.
 
 Ce modele est un `CalibratedClassifierCV`, c'est-a-dire 5 Random Forest (un par pli de validation croisee) suivis d'une sigmoide de calibration. `TreeExplainer` ne sait pas lire la calibration : les valeurs SHAP sont calculees sur chacun des 5 Random Forest internes, puis moyennees. Elles expliquent donc le score avant la sigmoide, qui est monotone et ne change pas le sens de lecture.
 
 Les resultats concordent avec les `feature_importances_` et les correlations de l'analyse exploratoire : `distance_to_keeper`, `shot_angle`, `defenders_in_cone`, `distance_to_goal` et `keeper_lateral_offset` dominent tres largement les variables de contexte.
+
+La correlation de rang (Spearman) entre l'importance SHAP du Random Forest et la valeur absolue des coefficients de la regression logistique est de **0.60** (p=0.002) sur les 24 features, et de **0.90** sur les 5 features geometriques. Un modele lineaire et un modele d'arbres, entraines independamment, hierarchisent donc les variables geometriques de la meme facon, avec `distance_to_keeper` en tete pour les deux.
+
+L'accord partiel sur l'ensemble des features s'explique par trois ecarts :
+- **`distance_to_goal`** : 4e pour le Random Forest, 22e pour la regression logistique. Les arbres se servent de plusieurs variables quasi redondantes, alors que la colinearite rend son coefficient instable (voir plus haut).
+- **Les indicatrices** (partie du corps, technique) : fortes pour la regression logistique (pied gauche 2e, pied droit 3e, technique normale 4e), plus faibles pour le Random Forest. Un coefficient mesure l'effet d'une categorie contre la reference, SHAP la contribution moyenne sur les tirs du test : une indicatrice qui ne separe qu'une minorite de tirs pese peu en moyenne.
+- **`shot_first_time`** : 6e pour le Random Forest, 18e pour la regression logistique. Son effet depend probablement du contexte du tir, ce qu'un coefficient unique ne peut pas representer.
 
 ## Calibration des probabilites
 
@@ -228,7 +264,7 @@ xg-shot-prediction/
 │   ├── raw/                     # Tirs et freeze frames extraits
 │   └── processed/                # Features finales
 ├── notebooks/
-│   └── 01_edashap.ipynb          # Analyse exploratoire et SHAP sur models/rf_calibrated.pkl
+│   └── 01_edashap.ipynb          # EDA, coefficients de la regression logistique, SHAP du Random Forest
 ├── src/
 │   ├── inventory_360.py          # Inventaire des competitions StatsBomb avec donnees 360
 │   ├── extract_data.py           # Extraction StatsBomb via mplsoccer
@@ -238,7 +274,7 @@ xg-shot-prediction/
 │   ├── train_rf.py                # Random Forest, calibration, sauvegarde du modele pour le notebook
 │   ├── train_knn.py
 │   └── benchmark.py               # Comparaison des modeles sauvegardes et du xG StatsBomb
-├── reports/                      # Courbes ROC, graphiques SHAP, courbe de calibration
+├── reports/                      # Courbes ROC, coefficients, graphiques SHAP, courbe de calibration
 ├── requirements.txt
 └── README.md
 ```

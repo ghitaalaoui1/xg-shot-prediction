@@ -47,7 +47,7 @@ data/processed/shots_features.csv
       v split.py            (train / test / holdout split, shared by every script)
       |
       v train_logistic.py / train_rf.py / train_knn.py
-reports/                     (ROC curves, SHAP plots, calibration curve)
+reports/                     (ROC curves, coefficients, SHAP plots, calibration curve)
       |
       v api/main.py          (FastAPI real-time scoring endpoint)
 ```
@@ -64,7 +64,7 @@ From the shot location and its associated freeze frame:
 | `distance_to_keeper` | Euclidean distance between the shooter and the opposing goalkeeper (variable position) |
 | `keeper_lateral_offset` | Perpendicular distance (in yards) between the goalkeeper and the bisector of the shooting angle (shooter, left post, right post) |
 
-`distance_to_goal` and `distance_to_keeper` capture two complementary, non-redundant things: the first is always relative to a fixed point on the pitch, the second is relative to the keeper's actual position at the moment of the shot, which varies depending on whether he stayed on his line or rushed out to meet the shooter. It is in fact the single most important feature according to the SHAP ranking.
+`distance_to_goal` and `distance_to_keeper` capture two complementary things: the first is always relative to a fixed point on the pitch, the second is relative to the keeper's actual position at the moment of the shot, which varies depending on whether he stayed on his line or rushed out to meet the shooter. It is in fact the single most important feature, for both logistic regression and the Random Forest. The two distances nonetheless remain highly correlated (0.96), which makes their coefficients hard to separate in a linear model (see Interpretability).
 
 `keeper_lateral_offset` complements `distance_to_keeper` along the lateral axis: two keepers at the same distance from the shooter can be either perfectly centred in the shooting angle, or shifted towards one post and leaving one side of the goal open. The bisector of the shooting angle is the keeper's theoretical optimal position; the feature measures the deviation from that line (0 = well positioned). In the data, the mean offset is 1.08 yards on goals versus 0.60 yards on non-goals (correlation +0.15 with the target). The effect is mostly non-linear (concentrated on large offsets, keeper beaten or out of position): when it was added (5x5 cross-validation, on the 2022 World Cup alone), the feature slightly improved the Random Forest (AUC 0.775 -> 0.778), was neutral for logistic regression, and hurt KNN (0.80 -> 0.75), which therefore keeps its original four features.
 
@@ -117,13 +117,49 @@ With all 24 features (including the encoded categorical variables), KNN produced
 
 The KNN script also reports results at a decision threshold lowered to 0.3: recall on the goal class rises from 0.11 to 0.27, a concrete illustration that the choice of decision threshold is not neutral on a heavily imbalanced problem.
 
-## Interpretability (SHAP)
+## Interpretability
 
-A SHAP analysis (`notebooks/01_edashap.ipynb`) explains the Random Forest's individual predictions. The notebook does not retrain any model: it loads `models/rf_calibrated.pkl`, the very model that `train_rf.py` saves. A single source of truth: the script trains and saves, the notebook explains.
+The notebook `notebooks/01_edashap.ipynb` does not retrain any model: it loads the ones the scripts save in `models/`. A single source of truth: the script trains and saves, the notebook explains.
+
+### The served model: logistic regression coefficients
+
+Since the features are standardised, the coefficients are directly comparable with one another. A coefficient of +0.4 means that one more standard deviation on the variable multiplies the odds of scoring by e^0.4, about 1.5. The sign gives the direction, the absolute value the relative importance (full chart: `reports/logistic_coefficients.png`).
+
+| Feature | Coefficient | Effect of one more standard deviation on the odds |
+|---|---|---|
+| `distance_to_keeper` | -0.73 | x 0.48 |
+| `shot_angle` | +0.52 | x 1.68 |
+| `defenders_in_cone` | -0.26 | x 0.77 |
+| `keeper_lateral_offset` | +0.25 | x 1.28 |
+| `distance_to_goal` | -0.01 | x 0.99 |
+
+The signs make football sense: the further the keeper and the more defenders in the cone, the lower the chance; the wider the angle and the more the keeper is off-centre, the higher. Indicator variables read against the category dropped at encoding: a shot with the foot (+0.63) converts better than a header, a normal strike (+0.60) better than a backheel.
+
+The surprising case is `distance_to_goal`, close to zero. Its coefficient changes depending on which variables sit alongside it:
+
+| Variables in the model | `distance_to_goal` coefficient |
+|---|---|
+| `distance_to_goal` alone | -0.99 |
+| + `distance_to_keeper` | -0.17 |
+| + `shot_angle` | **+0.80** |
+| all 24 features | -0.01 |
+
+The sign even flips: this is collinearity. `distance_to_goal` correlates at 0.96 with `distance_to_keeper` and at -0.75 with `shot_angle`. Since the keeper usually stands close to his goal, and the angle narrows as the shooter moves away, these three variables carry largely the same information, which the linear model cannot tell apart. The individual coefficient of `distance_to_goal` is therefore not interpretable, only the combined effect of the three is: it does not mean that distance to goal is useless.
+
+### Do the two model families see the same thing?
+
+The Random Forest is no longer the served model, but it remains a valuable point of comparison. A linear model and a tree model learn in very different ways: if they rank the variables the same way, that ranking does not depend on the choices of one particular algorithm. The Random Forest (`models/rf_calibrated.pkl`) is explained with SHAP, and its variable ranking is compared with that of the logistic regression coefficients.
 
 This model is a `CalibratedClassifierCV`, i.e. 5 Random Forests (one per cross-validation fold) followed by a sigmoid calibration. `TreeExplainer` cannot read the calibration step: SHAP values are computed on each of the 5 internal Random Forests, then averaged. They therefore explain the score before the sigmoid, which is monotonic and does not change how they read.
 
 The results agree with `feature_importances_` and the correlations from the exploratory analysis: `distance_to_keeper`, `shot_angle`, `defenders_in_cone`, `distance_to_goal` and `keeper_lateral_offset` dominate the context variables by a wide margin.
+
+The rank correlation (Spearman) between the Random Forest's SHAP importance and the absolute value of the logistic regression coefficients is **0.60** (p=0.002) over the 24 features, and **0.90** over the 5 geometric features. A linear model and a tree model, trained independently, therefore rank the geometric variables the same way, with `distance_to_keeper` first for both.
+
+The partial agreement over all features comes down to three gaps:
+- **`distance_to_goal`**: 4th for the Random Forest, 22nd for logistic regression. Trees use several near-redundant variables, whereas collinearity makes its coefficient unstable (see above).
+- **Indicator variables** (body part, technique): strong for logistic regression (left foot 2nd, right foot 3rd, normal technique 4th), weaker for the Random Forest. A coefficient measures a category's effect against the reference, SHAP the average contribution over the test shots: an indicator that only separates a minority of shots weighs little on average.
+- **`shot_first_time`**: 6th for the Random Forest, 18th for logistic regression. Its effect probably depends on the shot's context, which a single coefficient cannot represent.
 
 ## Probability calibration
 
@@ -228,7 +264,7 @@ xg-shot-prediction/
 │   ├── raw/                     # Extracted shots and freeze frames
 │   └── processed/                # Final features
 ├── notebooks/
-│   └── 01_edashap.ipynb          # Exploratory analysis and SHAP on models/rf_calibrated.pkl
+│   └── 01_edashap.ipynb          # EDA, logistic regression coefficients, Random Forest SHAP
 ├── src/
 │   ├── inventory_360.py          # Inventory of StatsBomb competitions with 360 data
 │   ├── extract_data.py           # StatsBomb extraction via mplsoccer
@@ -238,7 +274,7 @@ xg-shot-prediction/
 │   ├── train_rf.py                # Random Forest, calibration, saving the model for the notebook
 │   ├── train_knn.py
 │   └── benchmark.py               # Comparison of saved models and StatsBomb xG
-├── reports/                      # ROC curves, SHAP plots, calibration curve
+├── reports/                      # ROC curves, coefficients, SHAP plots, calibration curve
 ├── requirements.txt
 └── README.md
 ```
