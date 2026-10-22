@@ -4,8 +4,12 @@ import joblib
 import pandas as pd
 import os
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-model = joblib.load(os.path.join(BASE_DIR, "model.pkl"))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_PATH = os.path.join(BASE_DIR, "models", "rf_calibrated.pkl")
+
+artifact = joblib.load(MODEL_PATH)
+model = artifact["model"]
+FEATURES = artifact["features"]
 
 app = FastAPI(title="xG Shot Prediction API")
 

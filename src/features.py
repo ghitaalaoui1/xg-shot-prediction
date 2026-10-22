@@ -3,12 +3,33 @@ import numpy as np
 import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SHOTS_PATH = os.path.join(BASE_DIR, "data", "raw", "shots_worldcup2022.csv")
-FREEZE_PATH = os.path.join(BASE_DIR, "data", "raw", "freeze_worldcup2022.csv")
+SHOTS_PATH = os.path.join(BASE_DIR, "data", "raw", "shots.csv")
+FREEZE_PATH = os.path.join(BASE_DIR, "data", "raw", "freeze.csv")
 OUTPUT_PATH = os.path.join(BASE_DIR, "data", "processed", "shots_features.csv")
 
 GOAL_X, GOAL_Y = 120, 40
 POST_Y1, POST_Y2 = 36, 44
+
+TARGET = 'is_goal'
+
+# Colonnes d'organisation : conservees pour le decoupage (split.py), jamais dans X
+ID_COLUMNS = ['match_id', 'competition']
+
+# xG fourni par StatsBomb : prediction d'un autre modele, garde pour le benchmark, jamais dans X
+REFERENCE_COLUMNS = ['shot_statsbomb_xg']
+
+# Seules variables autorisees a entrer dans X
+FEATURES = [
+    'distance_to_goal', 'shot_angle', 'defenders_in_cone', 'distance_to_keeper',
+    'keeper_lateral_offset', 'under_pressure', 'shot_first_time',
+    'body_part_name_Left Foot', 'body_part_name_Other', 'body_part_name_Right Foot',
+    'technique_name_Diving Header', 'technique_name_Half Volley', 'technique_name_Lob',
+    'technique_name_Normal', 'technique_name_Overhead Kick', 'technique_name_Volley',
+    'play_pattern_name_From Counter', 'play_pattern_name_From Free Kick',
+    'play_pattern_name_From Goal Kick', 'play_pattern_name_From Keeper',
+    'play_pattern_name_From Kick Off', 'play_pattern_name_From Throw In',
+    'play_pattern_name_Other', 'play_pattern_name_Regular Play',
+]
 
 
 def compute_distance_angle(shots):
@@ -95,7 +116,13 @@ def build_features():
     shots = compute_distance_angle(shots)
     shots = compute_defenders_and_keeper(shots, freeze)
 
-    keep_cols = [
+    n_before = len(shots)
+    shots = shots.dropna(subset=["distance_to_keeper", "keeper_lateral_offset"])
+    dropped = n_before - len(shots)
+    if dropped:
+        print(f"{dropped} tirs ecartes : pas de gardien dans le freeze frame (but vide)")
+
+    keep_cols = ID_COLUMNS + REFERENCE_COLUMNS + [
         'is_goal', 'distance_to_goal', 'shot_angle', 'defenders_in_cone',
         'distance_to_keeper', 'keeper_lateral_offset', 'under_pressure', 'shot_first_time',
         'body_part_name', 'technique_name', 'play_pattern_name'
@@ -108,6 +135,7 @@ def build_features():
     print(f"\nValeurs manquantes avant encodage :\n{final_df.isnull().sum()}")
 
     final_df = pd.get_dummies(final_df, columns=['body_part_name', 'technique_name', 'play_pattern_name'], drop_first=True)
+    final_df = final_df[ID_COLUMNS + REFERENCE_COLUMNS + [TARGET] + FEATURES]
 
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     final_df.to_csv(OUTPUT_PATH, index=False)

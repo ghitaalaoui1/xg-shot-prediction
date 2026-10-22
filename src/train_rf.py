@@ -3,8 +3,9 @@ from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 from sklearn.metrics import brier_score_loss
 import joblib
 import pandas as pd
+from features import FEATURES
+from split import load_splits
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, roc_auc_score, roc_curve, confusion_matrix
 
@@ -22,12 +23,9 @@ def train_and_evaluate_rf(data_path):
 
     target_column = "is_goal"
 
-    X = df.drop(columns=[target_column])
-    y = df[target_column]
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
+    train, test, holdout = load_splits(df)
+    X_train, y_train = train[FEATURES], train[target_column]
+    X_test, y_test = test[FEATURES], test[target_column]
 
     # Pas de standardisation necessaire pour Random Forest
     print("\nEntrainement du Random Forest...")
@@ -35,8 +33,7 @@ def train_and_evaluate_rf(data_path):
         n_estimators=200,
         max_depth=6,
         min_samples_leaf=10,
-        random_state=42,
-        class_weight="balanced"
+        random_state=42
     )
     model.fit(X_train, y_train)
 
@@ -82,7 +79,7 @@ def train_and_evaluate_rf(data_path):
     plt.savefig(calib_path)
     print(f"Courbe de calibration sauvegardee dans : {calib_path}")
 
-    importances = pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False)
+    importances = pd.Series(model.feature_importances_, index=FEATURES).sort_values(ascending=False)
     print("\n--- Top 10 variables les plus importantes ---")
     print(importances.head(10))
 
@@ -99,8 +96,12 @@ def train_and_evaluate_rf(data_path):
     roc_path = os.path.join(BASE_DIR, "reports", "roc_curve_rf.png")
     plt.savefig(roc_path)
     print(f"\nCourbe ROC sauvegardee dans : {roc_path}")
-    # Sauvegarde du modele final pour l'API (calibré)
-    joblib.dump(calibrated_model, os.path.join(BASE_DIR, "api", "model.pkl"))
-    print(f"\nModele calibre sauvegarde dans : {os.path.join(BASE_DIR, 'api', 'model.pkl')}")
+    # Sauvegarde du modele final (calibre) avec ses metadonnees
+    artifact = {"model": calibrated_model, "features": FEATURES, "scaler": None}
+    os.makedirs(os.path.join(BASE_DIR, "models"), exist_ok=True)
+    path = os.path.join(BASE_DIR, "models", "rf_calibrated.pkl")
+    joblib.dump(artifact, path)
+    print(f"\nModele calibre sauvegarde dans : {path}")
+
 if __name__ == "__main__":
     train_and_evaluate_rf(FEATURES_PATH)
