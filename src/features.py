@@ -20,7 +20,7 @@ REFERENCE_COLUMNS = ['shot_statsbomb_xg']
 
 # Seules variables autorisees a entrer dans X
 FEATURES = [
-    'distance_to_goal', 'shot_angle', 'defenders_in_cone', 'distance_to_keeper',
+    'distance_to_goal', 'shot_angle', 'defenders_in_cone', 'keeper_off_line',
     'keeper_lateral_offset', 'under_pressure', 'shot_first_time',
     'body_part_name_Left Foot', 'body_part_name_Other', 'body_part_name_Right Foot',
     'technique_name_Diving Header', 'technique_name_Half Volley', 'technique_name_Lob',
@@ -104,6 +104,10 @@ def compute_defenders_and_keeper(shots, freeze):
     shots['defenders_in_cone'] = n_defenders
     shots['distance_to_keeper'] = dist_to_keeper
     shots['keeper_lateral_offset'] = keeper_offset
+    # distance_to_keeper est correlee a 0.96 avec distance_to_goal (le gardien est en general pres de sa ligne).
+    # On ne garde que ce qu'elle apporte en plus : de combien le gardien est sorti vers le tireur.
+    # Exact si le gardien est sur l'axe du tir, approximation pour un tir en biais.
+    shots['keeper_off_line'] = shots['distance_to_goal'] - shots['distance_to_keeper']
     return shots
 
 
@@ -117,14 +121,14 @@ def build_features():
     shots = compute_defenders_and_keeper(shots, freeze)
 
     n_before = len(shots)
-    shots = shots.dropna(subset=["distance_to_keeper", "keeper_lateral_offset"])
+    shots = shots.dropna(subset=["keeper_off_line", "keeper_lateral_offset"])
     dropped = n_before - len(shots)
     if dropped:
         print(f"{dropped} tirs ecartes : pas de gardien dans le freeze frame (but vide)")
 
     keep_cols = ID_COLUMNS + REFERENCE_COLUMNS + [
         'is_goal', 'distance_to_goal', 'shot_angle', 'defenders_in_cone',
-        'distance_to_keeper', 'keeper_lateral_offset', 'under_pressure', 'shot_first_time',
+        'keeper_off_line', 'keeper_lateral_offset', 'under_pressure', 'shot_first_time',
         'body_part_name', 'technique_name', 'play_pattern_name'
     ]
     final_df = shots[keep_cols].copy()

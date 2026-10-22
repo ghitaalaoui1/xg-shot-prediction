@@ -61,12 +61,12 @@ From the shot location and its associated freeze frame:
 | `distance_to_goal` | Euclidean distance between the shot location and the center of the goal (fixed point) |
 | `shot_angle` | Angle at which the shooter sees the width of the goal (trigonometry on both posts) |
 | `defenders_in_cone` | Number of outfield opponents inside the shooting cone (shooter, left post, right post) |
-| `distance_to_keeper` | Euclidean distance between the shooter and the opposing goalkeeper (variable position) |
+| `keeper_off_line` | How far the keeper has come out towards the shooter: `distance_to_goal` minus the shooter-keeper distance |
 | `keeper_lateral_offset` | Perpendicular distance (in yards) between the goalkeeper and the bisector of the shooting angle (shooter, left post, right post) |
 
-`distance_to_goal` and `distance_to_keeper` capture two complementary things: the first is always relative to a fixed point on the pitch, the second is relative to the keeper's actual position at the moment of the shot, which varies depending on whether he stayed on his line or rushed out to meet the shooter. It is in fact the single most important feature, for both logistic regression and the Random Forest. The two distances nonetheless remain highly correlated (0.96), which makes their coefficients hard to separate in a linear model (see Interpretability).
+`distance_to_goal` and `keeper_off_line` capture two distinct notions: how far from goal the shooter strikes, and how far the keeper has come off his line to meet him. They are weakly correlated (0.09). A first version used the shooter-keeper distance directly (`distance_to_keeper`), but it correlated at 0.96 with `distance_to_goal`: since the keeper usually stands close to his line, both measured almost the same thing. It only carried information of its own when the keeper is off his line, which is exactly what `keeper_off_line` isolates (see Interpretability). The difference of distances is exact when the keeper is on the shot's axis, and an approximation for an angled shot.
 
-`keeper_lateral_offset` complements `distance_to_keeper` along the lateral axis: two keepers at the same distance from the shooter can be either perfectly centred in the shooting angle, or shifted towards one post and leaving one side of the goal open. The bisector of the shooting angle is the keeper's theoretical optimal position; the feature measures the deviation from that line (0 = well positioned). In the data, the mean offset is 1.08 yards on goals versus 0.60 yards on non-goals (correlation +0.15 with the target). The effect is mostly non-linear (concentrated on large offsets, keeper beaten or out of position): when it was added (5x5 cross-validation, on the 2022 World Cup alone), the feature slightly improved the Random Forest (AUC 0.775 -> 0.778), was neutral for logistic regression, and hurt KNN (0.80 -> 0.75), which therefore keeps its original four features.
+`keeper_lateral_offset` complements `keeper_off_line` along the lateral axis: two keepers who came out by the same distance can be either perfectly centred in the shooting angle, or shifted towards one post and leaving one side of the goal open. The bisector of the shooting angle is the keeper's theoretical optimal position; the feature measures the deviation from that line (0 = well positioned). In the data, the mean offset is 1.08 yards on goals versus 0.60 yards on non-goals (correlation +0.15 with the target). The effect is mostly non-linear (concentrated on large offsets, keeper beaten or out of position): when it was added (5x5 cross-validation, on the 2022 World Cup alone), the feature slightly improved the Random Forest (AUC 0.775 -> 0.778), was neutral for logistic regression, and hurt KNN (0.80 -> 0.75), which therefore keeps its original four features.
 
 The `shot_statsbomb_xg` column, provided by StatsBomb, was deliberately excluded from the features: it is already a prediction from another model, using it would have introduced a data leak of the same kind encountered in an earlier project (credit scoring). It is, however, used as a reference in the benchmark.
 
@@ -80,7 +80,7 @@ The `shot_statsbomb_xg` column, provided by StatsBomb, was deliberately excluded
 ## Exploratory analysis: key findings
 
 - The geometric features dominate every other variable (shot technique, body part used, play context) by a wide margin in terms of correlation with the target
-- `shot_angle` (correlation +0.28), `distance_to_keeper` (-0.23) and `distance_to_goal` (-0.22) are the three strongest signals
+- `shot_angle` (correlation +0.28), `distance_to_goal` (-0.22) and `keeper_lateral_offset` (+0.15) are the three strongest signals
 - Goals are, on average, taken from a wider angle, a shorter distance to goal and to the keeper, and with fewer defenders in the shooting cone than missed shots
 - Context variables (body part, technique, type of play) show weak discriminative power on their own
 
@@ -106,16 +106,16 @@ Three models were trained and compared on this same split (scores on the test se
 | Model | Features used | ROC-AUC | Recall (goal, threshold 0.5) |
 |---|---|---|---|
 | Logistic Regression | All (24) | 0.792 | 0.10 |
-| Random Forest (tuned) | All (24) | 0.787 | 0.04 |
-| KNN | 4 geometric features only | 0.739 | 0.11 (0.27 at threshold 0.3) |
+| Random Forest (tuned) | All (24) | 0.784 | 0.04 |
+| KNN | 4 geometric features only | 0.739 | 0.12 (0.32 at threshold 0.3) |
 
 No model uses class weighting (`class_weight`): an xG model must produce a probability faithful to the real goal frequency, not maximise recall at a given threshold. With 10% goals, predicted probabilities rarely exceed 0.5, hence the low recall at that threshold for all three models, which does not reflect poor shot ranking (ROC-AUC). The 0.5 threshold has no particular meaning for an xG model.
 
 ### A deliberate methodological choice for KNN
 
-With all 24 features (including the encoded categorical variables), KNN produced noticeably weaker results (AUC around 0.65 versus 0.80 with 4 features, measured on the 2022 World Cup alone), a direct illustration of the curse of dimensionality: the geometric distance computed by the algorithm ends up dominated by noise from sparse categorical columns rather than by the variables that actually matter. KNN is therefore restricted to the four continuous numerical variables with a genuine notion of distance. It nonetheless trails the other two models on the current dataset (AUC 0.739 versus 0.79). Logistic regression and Random Forest, by contrast, handle the full 24 features well thanks to their different internal mechanisms (weighted coefficients, successive splits).
+With all 24 features (including the encoded categorical variables), KNN produced noticeably weaker results (AUC around 0.65 versus 0.80 with 4 features, measured on the 2022 World Cup alone), a direct illustration of the curse of dimensionality: the geometric distance computed by the algorithm ends up dominated by noise from sparse categorical columns rather than by the variables that actually matter. KNN is therefore restricted to the four continuous numerical variables with a genuine notion of distance. It nonetheless trails the other two models on the current dataset (AUC 0.739 versus 0.78 to 0.79). Logistic regression and Random Forest, by contrast, handle the full 24 features well thanks to their different internal mechanisms (weighted coefficients, successive splits).
 
-The KNN script also reports results at a decision threshold lowered to 0.3: recall on the goal class rises from 0.11 to 0.27, a concrete illustration that the choice of decision threshold is not neutral on a heavily imbalanced problem.
+The KNN script also reports results at a decision threshold lowered to 0.3: recall on the goal class rises from 0.12 to 0.32, a concrete illustration that the choice of decision threshold is not neutral on a heavily imbalanced problem.
 
 ## Interpretability
 
@@ -127,24 +127,26 @@ Since the features are standardised, the coefficients are directly comparable wi
 
 | Feature | Coefficient | Effect of one more standard deviation on the odds |
 |---|---|---|
-| `distance_to_keeper` | -0.73 | x 0.48 |
-| `shot_angle` | +0.52 | x 1.68 |
-| `defenders_in_cone` | -0.26 | x 0.77 |
+| `distance_to_goal` | -0.73 | x 0.48 |
+| `shot_angle` | +0.53 | x 1.69 |
+| `defenders_in_cone` | -0.27 | x 0.77 |
 | `keeper_lateral_offset` | +0.25 | x 1.28 |
-| `distance_to_goal` | -0.01 | x 0.99 |
+| `keeper_off_line` | +0.19 | x 1.21 |
 
-The signs make football sense: the further the keeper and the more defenders in the cone, the lower the chance; the wider the angle and the more the keeper is off-centre, the higher. Indicator variables read against the category dropped at encoding: a shot with the foot (+0.63) converts better than a header, a normal strike (+0.60) better than a backheel.
+The signs make football sense: the longer the shot and the more defenders in the cone, the lower the chance; the wider the angle and the more the keeper is off-centre, the higher. `keeper_off_line` has no obvious sign a priori: a keeper coming out narrows the angle, but keepers mostly come out on one-on-ones, which are clear chances. The positive coefficient describes that association, not a causal effect of coming out. Indicator variables read against the category dropped at encoding: a shot with the foot (+0.64) converts better than a header, a normal strike (+0.61) better than a backheel.
 
-The surprising case is `distance_to_goal`, close to zero. Its coefficient changes depending on which variables sit alongside it:
+#### Why `keeper_off_line` replaced `distance_to_keeper`
 
-| Variables in the model | `distance_to_goal` coefficient |
-|---|---|
-| `distance_to_goal` alone | -0.99 |
-| + `distance_to_keeper` | -0.17 |
-| + `shot_angle` | **+0.80** |
-| all 24 features | -0.01 |
+The previous version used the shooter-keeper distance, correlated at 0.96 with `distance_to_goal` since the keeper usually stands close to his line. The `distance_to_goal` coefficient then became unstable, to the point of flipping sign:
 
-The sign even flips: this is collinearity. `distance_to_goal` correlates at 0.96 with `distance_to_keeper` and at -0.75 with `shot_angle`. Since the keeper usually stands close to his goal, and the angle narrows as the shooter moves away, these three variables carry largely the same information, which the linear model cannot tell apart. The individual coefficient of `distance_to_goal` is therefore not interpretable, only the combined effect of the three is: it does not mean that distance to goal is useless.
+| Variables in the model | With `distance_to_keeper` | With `keeper_off_line` |
+|---|---|---|
+| `distance_to_goal` alone | -0.99 | -0.99 |
+| + keeper variable | -0.17 | -1.06 |
+| + `shot_angle` | **+0.80** | -0.48 |
+| all 24 features | -0.01 | -0.73 |
+
+In the old version, distance to goal looked useless (-0.01) and `distance_to_keeper` carried the whole distance effect. `keeper_off_line` only keeps what the keeper's position adds on top, and its correlation with `distance_to_goal` drops to 0.09. For logistic regression it is the same information presented differently: performance is identical (AUC 0.792), but each coefficient now has a meaning. The value still moves with the angle (correlation -0.75 with distance), which is unavoidable since moving away from goal narrows the angle, but the sign no longer changes. The choice was validated on the test set, without looking at the holdout.
 
 ### Do the two model families see the same thing?
 
@@ -152,14 +154,15 @@ The Random Forest is no longer the served model, but it remains a valuable point
 
 This model is a `CalibratedClassifierCV`, i.e. 5 Random Forests (one per cross-validation fold) followed by a sigmoid calibration. `TreeExplainer` cannot read the calibration step: SHAP values are computed on each of the 5 internal Random Forests, then averaged. They therefore explain the score before the sigmoid, which is monotonic and does not change how they read.
 
-The results agree with `feature_importances_` and the correlations from the exploratory analysis: `distance_to_keeper`, `shot_angle`, `defenders_in_cone`, `distance_to_goal` and `keeper_lateral_offset` dominate the context variables by a wide margin.
+The results agree with `feature_importances_` and the correlations from the exploratory analysis: `shot_angle`, `distance_to_goal`, `defenders_in_cone`, `keeper_lateral_offset` and `keeper_off_line` dominate the context variables by a wide margin.
 
-The rank correlation (Spearman) between the Random Forest's SHAP importance and the absolute value of the logistic regression coefficients is **0.60** (p=0.002) over the 24 features, and **0.90** over the 5 geometric features. A linear model and a tree model, trained independently, therefore rank the geometric variables the same way, with `distance_to_keeper` first for both.
+The rank correlation (Spearman) between the Random Forest's SHAP importance and the absolute value of the logistic regression coefficients is **0.64** (p=0.001) over the 24 features, and **0.90** over the 5 geometric features. A linear model and a tree model, trained independently, therefore rank the geometric variables the same way, apart from swapping the top two: `distance_to_goal` is 1st for logistic regression and 2nd for the Random Forest, `shot_angle` the reverse.
 
-The partial agreement over all features comes down to three gaps:
-- **`distance_to_goal`**: 4th for the Random Forest, 22nd for logistic regression. Trees use several near-redundant variables, whereas collinearity makes its coefficient unstable (see above).
+The partial agreement over all features comes down to two gaps:
 - **Indicator variables** (body part, technique): strong for logistic regression (left foot 2nd, right foot 3rd, normal technique 4th), weaker for the Random Forest. A coefficient measures a category's effect against the reference, SHAP the average contribution over the test shots: an indicator that only separates a minority of shots weighs little on average.
-- **`shot_first_time`**: 6th for the Random Forest, 18th for logistic regression. Its effect probably depends on the shot's context, which a single coefficient cannot represent.
+- **`shot_first_time`**: 6th for the Random Forest, 19th for logistic regression. Its effect probably depends on the shot's context, which a single coefficient cannot represent.
+
+With the old `distance_to_keeper` variable, the correlation was only 0.60: `distance_to_goal`, made unstable by collinearity, ranked 22nd for logistic regression.
 
 ## Probability calibration
 
@@ -169,17 +172,17 @@ The Random Forest is calibrated using `CalibratedClassifierCV` (sigmoid method, 
 
 | | Brier score | ROC-AUC |
 |---|---|---|
-| Before calibration | 0.0829 | 0.7871 |
-| After calibration | 0.0832 | 0.7877 |
+| Before calibration | 0.0836 | 0.7838 |
+| After calibration | 0.0840 | 0.7826 |
 
 Reading this figure requires a reference. The trivial model predicts the same probability for every shot, equal to the goal rate of the training set:
 
 | Prediction (test set) | Brier score |
 |---|---|
 | Constant 0.101, training goal rate (trivial baseline) | 0.0955 |
-| Random Forest | **0.0829** |
+| Random Forest | **0.0836** |
 
-The Random Forest reduces the error by 13% compared to this baseline (Brier skill score of 0.13). On such an imbalanced problem the baseline is already low: a Brier score close to 0.08 only means something when compared to that 0.0955. Note that the baseline must be computed on the same set as the model: on the full dataset (9.9% goal rate), the same constant would give 0.089, which is not comparable.
+The Random Forest reduces the error by 12% compared to this baseline (Brier skill score of 0.12). On such an imbalanced problem the baseline is already low: a Brier score close to 0.08 only means something when compared to that 0.0955. Note that the baseline must be computed on the same set as the model: on the full dataset (9.9% goal rate), the same constant would give 0.089, which is not comparable.
 
 In the current version, calibration changes almost nothing: the Random Forest, trained without class weighting, already produces faithful probabilities. Calibration is kept as a safeguard, and the calibration curve (`reports/calibration_curve.png`) lets you check this visually.
 
@@ -207,18 +210,18 @@ For a test shot (distance to goal of 8, angle of 1.2, zero defenders, keeper 5 u
 | Constant (training goal rate) | - | 0.0955 | 0.3403 |
 | **StatsBomb xG** | **0.828** | **0.0774** | **0.2664** |
 | Logistic Regression | 0.792 | 0.0812 | 0.2822 |
-| Calibrated Random Forest | 0.788 | 0.0832 | 0.2888 |
-| KNN | 0.739 | 0.0871 | 0.8576 |
+| Calibrated Random Forest | 0.783 | 0.0840 | 0.2916 |
+| KNN | 0.739 | 0.0860 | 0.7951 |
 
 ### How much of the signal is captured?
 
 StatsBomb does better, as expected. The real question is: by how much?
 
 ```
-Brier:  constant 0.0955  ->  Random Forest 0.0832  ->  StatsBomb 0.0774
+Brier:  constant 0.0955  ->  Random Forest 0.0840  ->  StatsBomb 0.0774
 ```
 
-The Random Forest captures 68% of the improvement StatsBomb achieves over the trivial baseline, roughly two thirds of the signal. Logistic regression captures 79%. These models only have the shot geometry and a few context variables (body part, technique, pressure, type of play), without the richer information available to StatsBomb's model.
+The Random Forest captures 64% of the improvement StatsBomb achieves over the trivial baseline, close to two thirds of the signal. Logistic regression captures 79%. These models only have the shot geometry and a few context variables (body part, technique, pressure, type of play), without the richer information available to StatsBomb's model.
 
 The remaining gap (AUC 0.828 versus 0.792) therefore does not come from body part, technique or pressure, which our models already know. It comes from information present in the raw StatsBomb data but not yet used, listed in the next steps.
 
@@ -226,7 +229,7 @@ Note: on this benchmark, logistic regression beats the Random Forest on all thre
 
 ### The KNN case: good ranking, unusable probabilities
 
-KNN reaches an AUC of 0.739: it ranks shots correctly. But its LogLoss of 0.86 is worse than a plain constant (0.34). Its probability is the share of goals among the 15 nearest neighbours: when none of them is a goal, it is exactly 0. That is the case for 826 of the 2123 test shots, 37 of which are actually goals. A goal predicted at 0% incurs a near-infinite LogLoss penalty. The Brier score, which caps the penalty at 1 per shot, largely hides this. KNN's probabilities are therefore not usable as xG.
+KNN reaches an AUC of 0.739: it ranks shots correctly. But its LogLoss of 0.80 is worse than a plain constant (0.34). Its probability is the share of goals among the 15 nearest neighbours: when none of them is a goal, it is exactly 0. That is the case for 809 of the 2123 test shots, 33 of which are actually goals. A goal predicted at 0% incurs a near-infinite LogLoss penalty. The Brier score, which caps the penalty at 1 per shot, largely hides this. KNN's probabilities are therefore not usable as xG.
 
 ### Euro 2024 holdout: a competition never seen before
 
@@ -236,9 +239,9 @@ The same benchmark, on the 1304 Euro 2024 shots (actual goal rate 7.5%):
 |---|---|---|---|---|
 | Constant (training goal rate) | - | 0.0702 | 0.2706 | 0.101 |
 | **StatsBomb xG** | **0.787** | **0.0615** | **0.2251** | 0.085 |
-| Logistic regression | 0.766 | 0.0635 | 0.2330 | 0.087 |
-| Calibrated Random Forest | 0.737 | 0.0652 | 0.2426 | 0.090 |
-| KNN | 0.634 | 0.0732 | 0.8841 | 0.085 |
+| Logistic regression | 0.767 | 0.0634 | 0.2330 | 0.087 |
+| Calibrated Random Forest | 0.741 | 0.0658 | 0.2445 | 0.090 |
+| KNN | 0.654 | 0.0734 | 0.8316 | 0.089 |
 
 At Euro 2024, 98 goals were scored against 111 expected according to StatsBomb xG. The gap amounts to 1.4 standard deviations and is therefore not significant. This is in fact a well-known property of xG: over a single tournament, finishing varies a lot, which is precisely what makes xG useful over a season rather than over a single match.
 

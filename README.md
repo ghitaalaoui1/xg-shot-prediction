@@ -61,12 +61,12 @@ A partir de la position du tir et du freeze frame associe :
 | `distance_to_goal` | Distance euclidienne entre le point de tir et le centre du but (point fixe) |
 | `shot_angle` | Angle sous lequel le tireur voit la largeur du but (trigonometrie sur les deux poteaux) |
 | `defenders_in_cone` | Nombre d'adversaires de champ a l'interieur du cone de tir (tireur, poteau gauche, poteau droit) |
-| `distance_to_keeper` | Distance euclidienne entre le tireur et le gardien adverse (position variable) |
+| `keeper_off_line` | De combien le gardien est sorti vers le tireur : `distance_to_goal` moins la distance tireur-gardien |
 | `keeper_lateral_offset` | Distance perpendiculaire (en yards) entre le gardien et la bissectrice de l'angle de tir (tireur, poteau gauche, poteau droit) |
 
-`distance_to_goal` et `distance_to_keeper` mesurent deux choses complementaires : la premiere est toujours relative a un point fixe du terrain, la seconde est relative a la position reelle du gardien au moment du tir, qui varie selon qu'il est reste sur sa ligne ou qu'il est sorti a la rencontre du tireur. C'est d'ailleurs la feature la plus importante, pour la regression logistique comme pour le Random Forest. Les deux distances restent toutefois tres correlees (0.96), ce qui rend leurs coefficients difficiles a separer dans un modele lineaire (voir Interpretabilite).
+`distance_to_goal` et `keeper_off_line` mesurent deux notions distinctes : a quelle distance le tireur frappe, et de combien le gardien est sorti de sa ligne a sa rencontre. Elles sont faiblement correlees (0.09). Une premiere version utilisait directement la distance tireur-gardien (`distance_to_keeper`), mais celle-ci etait correlee a 0.96 avec `distance_to_goal` : le gardien etant en general pres de sa ligne, les deux mesuraient presque la meme chose. Elle n'apportait de l'information propre que lorsque le gardien est avance, exactement ce que `keeper_off_line` isole (voir Interpretabilite). La difference de distances est exacte quand le gardien est sur l'axe du tir, et une approximation pour un tir en biais.
 
-`keeper_lateral_offset` complete `distance_to_keeper` sur l'axe lateral : deux gardiens a la meme distance du tireur peuvent etre l'un parfaitement centre dans l'angle, l'autre decale vers un poteau et laissant un cote du but ouvert. La bissectrice de l'angle de tir correspond a la position theorique ideale du gardien ; la feature mesure l'ecart a cette ligne (0 = gardien bien place). Sur les donnees, le decalage moyen est de 1.08 yard sur les buts contre 0.60 yard sur les tirs non convertis (correlation +0.15 avec la cible). L'effet est surtout non lineaire (il se concentre sur les gros decalages, gardien battu ou hors de position) : lors de son ajout (validation croisee 5x5, sur la seule Coupe du Monde 2022), la feature ameliorait legerement le Random Forest (AUC 0.775 -> 0.778), restait neutre pour la regression logistique et degradait le KNN (0.80 -> 0.75), qui conserve donc ses quatre features d'origine.
+`keeper_lateral_offset` complete `keeper_off_line` sur l'axe lateral : deux gardiens sortis de la meme distance peuvent etre l'un parfaitement centre dans l'angle, l'autre decale vers un poteau et laissant un cote du but ouvert. La bissectrice de l'angle de tir correspond a la position theorique ideale du gardien ; la feature mesure l'ecart a cette ligne (0 = gardien bien place). Sur les donnees, le decalage moyen est de 1.08 yard sur les buts contre 0.60 yard sur les tirs non convertis (correlation +0.15 avec la cible). L'effet est surtout non lineaire (il se concentre sur les gros decalages, gardien battu ou hors de position) : lors de son ajout (validation croisee 5x5, sur la seule Coupe du Monde 2022), la feature ameliorait legerement le Random Forest (AUC 0.775 -> 0.778), restait neutre pour la regression logistique et degradait le KNN (0.80 -> 0.75), qui conserve donc ses quatre features d'origine.
 
 La colonne `shot_statsbomb_xg`, fournie par StatsBomb, a volontairement ete exclue des features : c'est deja une prediction d'un autre modele, l'utiliser aurait constitue une fuite de donnees du meme type que celle rencontree sur un projet precedent (credit scoring). Elle sert en revanche de reference dans le benchmark.
 
@@ -80,7 +80,7 @@ La colonne `shot_statsbomb_xg`, fournie par StatsBomb, a volontairement ete excl
 ## Analyse exploratoire : principaux enseignements
 
 - Les features geometriques dominent tres largement toutes les autres variables (technique de frappe, pied utilise, contexte de jeu) en termes de correlation avec la cible
-- `shot_angle` (correlation +0.28), `distance_to_keeper` (-0.23) et `distance_to_goal` (-0.22) sont les trois signaux les plus forts
+- `shot_angle` (correlation +0.28), `distance_to_goal` (-0.22) et `keeper_lateral_offset` (+0.15) sont les trois signaux les plus forts
 - Les buts sont tires en moyenne avec un angle plus large, une distance au but et au gardien plus faible, et moins de defenseurs dans le cone de tir que les tirs non convertis
 - Les variables de contexte (pied utilise, technique, type d'action) ont un pouvoir discriminant faible pris isolement
 
@@ -106,16 +106,16 @@ Trois modeles ont ete entraines et compares sur ce meme decoupage (scores sur le
 | Modele | Features utilisees | ROC-AUC | Recall (but, seuil 0.5) |
 |---|---|---|---|
 | Regression Logistique | Toutes (24) | 0.792 | 0.10 |
-| Random Forest (tune) | Toutes (24) | 0.787 | 0.04 |
-| KNN | 4 features geometriques uniquement | 0.739 | 0.11 (0.27 a seuil 0.3) |
+| Random Forest (tune) | Toutes (24) | 0.784 | 0.04 |
+| KNN | 4 features geometriques uniquement | 0.739 | 0.12 (0.32 a seuil 0.3) |
 
 Aucun modele n'utilise de ponderation des classes (`class_weight`) : un modele xG doit produire une probabilite fidele a la frequence reelle des buts, pas maximiser le recall a un seuil donne. Avec 10% de buts, les probabilites predites depassent rarement 0.5, d'ou un recall faible a ce seuil pour les trois modeles, sans que cela traduise un mauvais classement des tirs (ROC-AUC). Le seuil de 0.5 n'a pas de sens particulier pour un modele xG.
 
 ### Un choix methodologique assume pour le KNN
 
-Avec les 24 features (incluant les variables categorielles encodees), le KNN obtenait des resultats nettement plus faibles (AUC autour de 0.65 contre 0.80 avec 4 features, mesure sur la seule Coupe du Monde 2022), une illustration directe de la malediction de la dimensionnalite : la distance geometrique calculee par l'algorithme devient dominee par le bruit des colonnes categorielles rares plutot que par les variables realement pertinentes. Le KNN est donc limite aux quatre variables numeriques continues qui ont un vrai sens de distance. Il reste neanmoins en retrait des deux autres modeles sur le jeu de donnees actuel (AUC 0.739 contre 0.79). La regression logistique et le Random Forest, eux, tolerent bien les 24 features grace a leurs mecanismes internes differents (coefficients ponderes, separations successives).
+Avec les 24 features (incluant les variables categorielles encodees), le KNN obtenait des resultats nettement plus faibles (AUC autour de 0.65 contre 0.80 avec 4 features, mesure sur la seule Coupe du Monde 2022), une illustration directe de la malediction de la dimensionnalite : la distance geometrique calculee par l'algorithme devient dominee par le bruit des colonnes categorielles rares plutot que par les variables realement pertinentes. Le KNN est donc limite aux quatre variables numeriques continues qui ont un vrai sens de distance. Il reste neanmoins en retrait des deux autres modeles sur le jeu de donnees actuel (AUC 0.739 contre 0.78 a 0.79). La regression logistique et le Random Forest, eux, tolerent bien les 24 features grace a leurs mecanismes internes differents (coefficients ponderes, separations successives).
 
-Le script KNN affiche aussi les resultats a un seuil de decision abaisse a 0.3 : le recall sur la classe but passe de 0.11 a 0.27, une illustration concrete que le choix du seuil de decision n'est pas neutre sur un probleme fortement desequilibre.
+Le script KNN affiche aussi les resultats a un seuil de decision abaisse a 0.3 : le recall sur la classe but passe de 0.12 a 0.32, une illustration concrete que le choix du seuil de decision n'est pas neutre sur un probleme fortement desequilibre.
 
 ## Interpretabilite
 
@@ -127,24 +127,26 @@ Les features etant standardisees, les coefficients sont directement comparables 
 
 | Feature | Coefficient | Effet d'un ecart-type de plus sur la cote |
 |---|---|---|
-| `distance_to_keeper` | -0.73 | x 0.48 |
-| `shot_angle` | +0.52 | x 1.68 |
-| `defenders_in_cone` | -0.26 | x 0.77 |
+| `distance_to_goal` | -0.73 | x 0.48 |
+| `shot_angle` | +0.53 | x 1.69 |
+| `defenders_in_cone` | -0.27 | x 0.77 |
 | `keeper_lateral_offset` | +0.25 | x 1.28 |
-| `distance_to_goal` | -0.01 | x 0.99 |
+| `keeper_off_line` | +0.19 | x 1.21 |
 
-Les signes ont un sens footballistique : plus le gardien est loin et plus il y a de defenseurs dans le cone, moins le tir a de chances, plus l'angle est ouvert et plus le gardien est decale, plus il en a. Les indicatrices se lisent contre la categorie retiree a l'encodage : un tir du pied (+0.63) convertit mieux qu'une tete, une frappe normale (+0.60) mieux qu'une talonnade.
+Les signes ont un sens footballistique : plus le tir est lointain et plus il y a de defenseurs dans le cone, moins il a de chances, plus l'angle est ouvert et plus le gardien est decale, plus il en a. `keeper_off_line` n'a pas de signe evident a priori : un gardien qui sort reduit l'angle, mais il sort surtout sur les face-a-face, des occasions franches. Le coefficient positif decrit cette association, pas un effet causal de la sortie. Les indicatrices se lisent contre la categorie retiree a l'encodage : un tir du pied (+0.64) convertit mieux qu'une tete, une frappe normale (+0.61) mieux qu'une talonnade.
 
-Le cas surprenant est `distance_to_goal`, quasi nulle. Son coefficient change selon les variables qui l'accompagnent :
+#### Pourquoi `keeper_off_line` a remplace `distance_to_keeper`
 
-| Variables du modele | Coefficient de `distance_to_goal` |
-|---|---|
-| `distance_to_goal` seule | -0.99 |
-| + `distance_to_keeper` | -0.17 |
-| + `shot_angle` | **+0.80** |
-| les 24 features | -0.01 |
+La version precedente utilisait la distance tireur-gardien, correlee a 0.96 avec `distance_to_goal` puisque le gardien est en general pres de sa ligne. Le coefficient de `distance_to_goal` devenait alors instable, au point de changer de signe :
 
-Le signe s'inverse meme : c'est de la colinearite. `distance_to_goal` est correlee a 0.96 avec `distance_to_keeper` et a -0.75 avec `shot_angle`. Le gardien se tenant en general pres de son but, et l'angle se refermant quand on s'eloigne, ces trois variables portent en grande partie la meme information, que le modele lineaire ne peut pas departager. Le coefficient individuel de `distance_to_goal` n'est donc pas interpretable, seul compte l'effet combine des trois : il ne faut pas en conclure que la distance au but est inutile.
+| Variables du modele | Avec `distance_to_keeper` | Avec `keeper_off_line` |
+|---|---|---|
+| `distance_to_goal` seule | -0.99 | -0.99 |
+| + variable gardien | -0.17 | -1.06 |
+| + `shot_angle` | **+0.80** | -0.48 |
+| les 24 features | -0.01 | -0.73 |
+
+Dans l'ancienne version, la distance au but semblait inutile (-0.01) et `distance_to_keeper` portait tout l'effet distance. `keeper_off_line` ne garde que ce que la position du gardien apporte en plus, et sa correlation avec `distance_to_goal` tombe a 0.09. Pour la regression logistique, c'est la meme information presentee autrement : la performance est identique (AUC 0.792), mais chaque coefficient a maintenant un sens. La valeur bouge encore avec l'angle (correlation -0.75 avec la distance), ce qui est inevitable puisque s'eloigner du but referme l'angle, mais le signe ne change plus. Le choix a ete valide sur le jeu de test, sans consulter le holdout.
 
 ### Les deux familles de modeles voient-elles la meme chose ?
 
@@ -152,14 +154,15 @@ Le Random Forest n'est plus le modele servi, mais il reste un point de comparais
 
 Ce modele est un `CalibratedClassifierCV`, c'est-a-dire 5 Random Forest (un par pli de validation croisee) suivis d'une sigmoide de calibration. `TreeExplainer` ne sait pas lire la calibration : les valeurs SHAP sont calculees sur chacun des 5 Random Forest internes, puis moyennees. Elles expliquent donc le score avant la sigmoide, qui est monotone et ne change pas le sens de lecture.
 
-Les resultats concordent avec les `feature_importances_` et les correlations de l'analyse exploratoire : `distance_to_keeper`, `shot_angle`, `defenders_in_cone`, `distance_to_goal` et `keeper_lateral_offset` dominent tres largement les variables de contexte.
+Les resultats concordent avec les `feature_importances_` et les correlations de l'analyse exploratoire : `shot_angle`, `distance_to_goal`, `defenders_in_cone`, `keeper_lateral_offset` et `keeper_off_line` dominent tres largement les variables de contexte.
 
-La correlation de rang (Spearman) entre l'importance SHAP du Random Forest et la valeur absolue des coefficients de la regression logistique est de **0.60** (p=0.002) sur les 24 features, et de **0.90** sur les 5 features geometriques. Un modele lineaire et un modele d'arbres, entraines independamment, hierarchisent donc les variables geometriques de la meme facon, avec `distance_to_keeper` en tete pour les deux.
+La correlation de rang (Spearman) entre l'importance SHAP du Random Forest et la valeur absolue des coefficients de la regression logistique est de **0.64** (p=0.001) sur les 24 features, et de **0.90** sur les 5 features geometriques. Un modele lineaire et un modele d'arbres, entraines independamment, hierarchisent donc les variables geometriques de la meme facon, a l'inversion pres des deux premieres : `distance_to_goal` est 1re pour la regression logistique et 2e pour le Random Forest, `shot_angle` l'inverse.
 
-L'accord partiel sur l'ensemble des features s'explique par trois ecarts :
-- **`distance_to_goal`** : 4e pour le Random Forest, 22e pour la regression logistique. Les arbres se servent de plusieurs variables quasi redondantes, alors que la colinearite rend son coefficient instable (voir plus haut).
+L'accord partiel sur l'ensemble des features s'explique par deux ecarts :
 - **Les indicatrices** (partie du corps, technique) : fortes pour la regression logistique (pied gauche 2e, pied droit 3e, technique normale 4e), plus faibles pour le Random Forest. Un coefficient mesure l'effet d'une categorie contre la reference, SHAP la contribution moyenne sur les tirs du test : une indicatrice qui ne separe qu'une minorite de tirs pese peu en moyenne.
-- **`shot_first_time`** : 6e pour le Random Forest, 18e pour la regression logistique. Son effet depend probablement du contexte du tir, ce qu'un coefficient unique ne peut pas representer.
+- **`shot_first_time`** : 6e pour le Random Forest, 19e pour la regression logistique. Son effet depend probablement du contexte du tir, ce qu'un coefficient unique ne peut pas representer.
+
+Avec l'ancienne variable `distance_to_keeper`, la correlation n'etait que de 0.60 : `distance_to_goal`, rendue instable par la colinearite, etait 22e pour la regression logistique.
 
 ## Calibration des probabilites
 
@@ -169,17 +172,17 @@ Le Random Forest est calibre avec `CalibratedClassifierCV` (methode sigmoide, va
 
 | | Brier score | ROC-AUC |
 |---|---|---|
-| Avant calibration | 0.0829 | 0.7871 |
-| Apres calibration | 0.0832 | 0.7877 |
+| Avant calibration | 0.0836 | 0.7838 |
+| Apres calibration | 0.0840 | 0.7826 |
 
 Pour lire ce chiffre, il faut une reference. Le modele trivial predit la meme probabilite pour tous les tirs, egale au taux de but du jeu d'entrainement :
 
 | Prediction (jeu de test) | Brier score |
 |---|---|
 | Constante a 0.101, taux de but du train (reference triviale) | 0.0955 |
-| Random Forest | **0.0829** |
+| Random Forest | **0.0836** |
 
-Le Random Forest reduit l'erreur de 13% par rapport a cette reference (Brier skill score de 0.13). Sur un probleme aussi desequilibre, la reference est deja basse : un Brier proche de 0.08 n'a de sens que compare a ce 0.0955. Attention, la reference doit etre calculee sur le meme jeu que le modele : sur l'ensemble des donnees (taux de but de 9.9%), la meme constante donnerait 0.089, un chiffre non comparable.
+Le Random Forest reduit l'erreur de 12% par rapport a cette reference (Brier skill score de 0.12). Sur un probleme aussi desequilibre, la reference est deja basse : un Brier proche de 0.08 n'a de sens que compare a ce 0.0955. Attention, la reference doit etre calculee sur le meme jeu que le modele : sur l'ensemble des donnees (taux de but de 9.9%), la meme constante donnerait 0.089, un chiffre non comparable.
 
 Sur la version actuelle, la calibration ne change presque rien : le Random Forest, entraine sans ponderation des classes, produit deja des probabilites fideles. Elle est conservee comme garde-fou, et la courbe de calibration (`reports/calibration_curve.png`) permet de le verifier visuellement.
 
@@ -207,18 +210,18 @@ Sur un tir test (distance au but de 8, angle de 1.2, zero defenseur, gardien a 5
 | Constante (taux de but du train) | - | 0.0955 | 0.3403 |
 | **xG StatsBomb** | **0.828** | **0.0774** | **0.2664** |
 | Regression logistique | 0.792 | 0.0812 | 0.2822 |
-| Random Forest calibre | 0.788 | 0.0832 | 0.2888 |
-| KNN | 0.739 | 0.0871 | 0.8576 |
+| Random Forest calibre | 0.783 | 0.0840 | 0.2916 |
+| KNN | 0.739 | 0.0860 | 0.7951 |
 
 ### Quelle part du signal est capturee ?
 
 StatsBomb fait mieux, c'etait attendu. La vraie question est : de combien ?
 
 ```
-Brier :  constante 0.0955  ->  Random Forest 0.0832  ->  StatsBomb 0.0774
+Brier :  constante 0.0955  ->  Random Forest 0.0840  ->  StatsBomb 0.0774
 ```
 
-Le Random Forest capture 68% de l'amelioration que StatsBomb obtient sur la reference triviale, soit environ les deux tiers du signal. La regression logistique en capture 79%. Ces modeles n'ont que la geometrie du tir et quelques variables de contexte (partie du corps, technique, pression, type d'action), sans l'information riche dont dispose le modele de StatsBomb.
+Le Random Forest capture 64% de l'amelioration que StatsBomb obtient sur la reference triviale, soit pres des deux tiers du signal. La regression logistique en capture 79%. Ces modeles n'ont que la geometrie du tir et quelques variables de contexte (partie du corps, technique, pression, type d'action), sans l'information riche dont dispose le modele de StatsBomb.
 
 L'ecart restant (AUC 0.828 contre 0.792) ne vient donc pas de la partie du corps, de la technique ou de la pression, que nos modeles connaissent deja. Il vient d'informations presentes dans les donnees brutes StatsBomb mais pas encore exploitees, listees dans les prochaines etapes.
 
@@ -226,7 +229,7 @@ A noter : sur ce benchmark, la regression logistique fait mieux que le Random Fo
 
 ### Le cas du KNN : bon classement, probabilites inutilisables
 
-Le KNN atteint une AUC de 0.739 : il classe correctement les tirs. Mais son LogLoss de 0.86 est pire que celui d'une simple constante (0.34). Sa probabilite est la proportion de buts parmi les 15 plus proches voisins : quand aucun d'eux n'est un but, elle vaut exactement 0. C'est le cas de 826 tirs du test sur 2123, dont 37 sont pourtant des buts. Un but predit a 0% coute une penalite quasi infinie en LogLoss. Le Brier, qui borne la penalite a 1 par tir, le masque en grande partie. Les probabilites du KNN ne sont donc pas utilisables comme xG.
+Le KNN atteint une AUC de 0.739 : il classe correctement les tirs. Mais son LogLoss de 0.80 est pire que celui d'une simple constante (0.34). Sa probabilite est la proportion de buts parmi les 15 plus proches voisins : quand aucun d'eux n'est un but, elle vaut exactement 0. C'est le cas de 809 tirs du test sur 2123, dont 33 sont pourtant des buts. Un but predit a 0% coute une penalite quasi infinie en LogLoss. Le Brier, qui borne la penalite a 1 par tir, le masque en grande partie. Les probabilites du KNN ne sont donc pas utilisables comme xG.
 
 ### Holdout Euro 2024 : une competition jamais vue
 
@@ -236,9 +239,9 @@ Le meme benchmark, sur les 1304 tirs de l'Euro 2024 (taux de but reel 7.5%) :
 |---|---|---|---|---|
 | Constante (taux de but du train) | - | 0.0702 | 0.2706 | 0.101 |
 | **xG StatsBomb** | **0.787** | **0.0615** | **0.2251** | 0.085 |
-| Regression logistique | 0.766 | 0.0635 | 0.2330 | 0.087 |
-| Random Forest calibre | 0.737 | 0.0652 | 0.2426 | 0.090 |
-| KNN | 0.634 | 0.0732 | 0.8841 | 0.085 |
+| Regression logistique | 0.767 | 0.0634 | 0.2330 | 0.087 |
+| Random Forest calibre | 0.741 | 0.0658 | 0.2445 | 0.090 |
+| KNN | 0.654 | 0.0734 | 0.8316 | 0.089 |
 
 Sur l'Euro 2024, 98 buts ont ete marques pour 111 attendus selon le xG StatsBomb. L'ecart represente 1.4 ecart-type et n'est donc pas significatif. C'est d'ailleurs une propriete connue du xG : sur un seul tournoi, la reussite devant le but varie beaucoup, et c'est precisement ce qui rend le xG utile sur une saison plutot que sur un match.
 

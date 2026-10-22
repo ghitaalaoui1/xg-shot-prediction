@@ -19,7 +19,7 @@ class ShotData(BaseModel):
     distance_to_goal: float
     shot_angle: float
     defenders_in_cone: int
-    distance_to_keeper: float
+    keeper_off_line: float
     keeper_lateral_offset: float
     under_pressure: int
     shot_first_time: int
@@ -48,7 +48,7 @@ def predict(data: ShotData):
         "distance_to_goal": data.distance_to_goal,
         "shot_angle": data.shot_angle,
         "defenders_in_cone": data.defenders_in_cone,
-        "distance_to_keeper": data.distance_to_keeper,
+        "keeper_off_line": data.keeper_off_line,
         "keeper_lateral_offset": data.keeper_lateral_offset,
         "under_pressure": data.under_pressure,
         "shot_first_time": data.shot_first_time,

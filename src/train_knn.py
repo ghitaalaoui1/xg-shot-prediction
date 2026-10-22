@@ -22,7 +22,7 @@ def train_and_evaluate_knn(data_path):
     target_column = "is_goal"
 
     # Memes features que pour la regression logistique et le Random Forest (comparaison equitable)
-    features_to_use = ['distance_to_goal', 'shot_angle', 'defenders_in_cone', 'distance_to_keeper']
+    features_to_use = ['distance_to_goal', 'shot_angle', 'defenders_in_cone', 'keeper_off_line']
 # KNN souffre de la malediction de la dimensionnalite sur des features categorielles encodees.
 # On ne garde que les 4 variables numeriques continues avec un vrai sens geometrique de distance,
 # contrairement a la regression logistique et au Random Forest qui utilisent toutes les features.
