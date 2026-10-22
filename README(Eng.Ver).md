@@ -249,6 +249,8 @@ At Euro 2024, 98 goals were scored against 111 expected according to StatsBomb x
 
 Logistic regression is exposed through a FastAPI application (`api/main.py`), with a `POST /predict` endpoint that takes a shot's geometric characteristics as input and returns the goal probability. It is the best of the three models on both the test set and the holdout, and its probabilities are already faithful without calibration (mean xG of 0.100 on the test set against a training goal rate of 0.101). FastAPI automatically generates interactive documentation at `/docs`, allowing the API to be tested without writing any code.
 
+**Interface change**: the `distance_to_keeper` field is replaced by `keeper_off_line`. Calls written for the previous version must be updated.
+
 ## Acknowledged limitation of the model
 
 The features used are purely geometric (position of the shot, the keeper, the defenders). The model captures nothing about the shooter's individual execution quality (shot power, accuracy, strong foot), a known limitation of public xG models, which have no access to biometric or shot-speed data.

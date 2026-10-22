@@ -249,6 +249,8 @@ Sur l'Euro 2024, 98 buts ont ete marques pour 111 attendus selon le xG StatsBomb
 
 La regression logistique est exposee via une API FastAPI (`api/main.py`), avec un endpoint `POST /predict` qui prend en entree les caracteristiques geometriques d'un tir et retourne la probabilite de but. C'est le meilleur des trois modeles sur le test comme sur le holdout, et ses probabilites sont deja fideles sans calibration (xG moyen de 0.100 sur le test pour un taux de but du train de 0.101). Une documentation interactive est generee automatiquement par FastAPI sur `/docs`, permettant de tester l'API sans ecrire de code.
 
+**Changement d'interface** : le champ `distance_to_keeper` est remplace par `keeper_off_line`. Les appels ecrits pour la version precedente doivent etre adaptes.
+
 ## Limite assumee du modele
 
 Les features utilisees sont purement geometriques (position du tir, du gardien, des defenseurs). Le modele ne capture rien de la qualite d'execution individuelle du tireur (puissance de frappe, precision, pied fort), une limite connue des modeles xG publics qui n'ont pas acces a des donnees biometriques ou de vitesse de frappe.
