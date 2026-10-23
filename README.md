@@ -88,7 +88,7 @@ La colonne `shot_statsbomb_xg`, fournie par StatsBomb, a volontairement ete excl
 
 ### Decoupage des donnees
 
-Les trois scripts d'entrainement (et le notebook) obtiennent leurs donnees par un unique appel a `load_splits` (`src/split.py`), et utilisent donc exactement les memes jeux :
+Les scripts d'entrainement (et le notebook) obtiennent leurs donnees par un unique appel a `load_splits` (`src/split.py`), et utilisent donc exactement les memes jeux :
 
 | Jeu | Contenu | Matchs | Tirs | Taux de but |
 |---|---|---|---|---|
@@ -212,6 +212,7 @@ Sur un tir test (distance au but de 8, angle de 1.2, zero defenseur, gardien a 5
 | Regression logistique | 0.792 | 0.0812 | 0.2822 |
 | Random Forest calibre | 0.783 | 0.0840 | 0.2916 |
 | KNN | 0.739 | 0.0860 | 0.7951 |
+| XGBoost | 0.795 | 0.0796 | 0.2780 |
 
 ### Quelle part du signal est capturee ?
 
@@ -223,9 +224,9 @@ Brier :  constante 0.0955  ->  Random Forest 0.0840  ->  StatsBomb 0.0774
 
 Le Random Forest capture 64% de l'amelioration que StatsBomb obtient sur la reference triviale, soit pres des deux tiers du signal. La regression logistique en capture 79%. Ces modeles n'ont que la geometrie du tir et quelques variables de contexte (partie du corps, technique, pression, type d'action), sans l'information riche dont dispose le modele de StatsBomb.
 
-L'ecart restant (AUC 0.828 contre 0.792) ne vient donc pas de la partie du corps, de la technique ou de la pression, que nos modeles connaissent deja. Il vient d'informations presentes dans les donnees brutes StatsBomb mais pas encore exploitees, listees dans les prochaines etapes.
+L'ecart restant (AUC 0.828 contre 0.792) ne vient donc pas de la partie du corps, de la technique ou de la pression, que nos modeles connaissent deja. Il vient d'informations presentes dans les donnees brutes StatsBomb mais pas encore exploitees, listees dans les pistes pour aller plus loin.
 
-A noter : sur ce benchmark, la regression logistique fait mieux que le Random Forest sur les trois metriques, et resiste mieux sur le holdout Euro 2024. C'est donc elle que sert l'API.
+A noter : sur ce benchmark, la regression logistique fait mieux que le Random Forest sur les trois metriques. XGBoost fait un peu mieux qu'elle sur le test (88% du signal capture), un ecart discute plus bas : il n'est pas distinguable du bruit.
 
 ### Le cas du KNN : bon classement, probabilites inutilisables
 
@@ -242,18 +243,44 @@ Le meme benchmark, sur les 1304 tirs de l'Euro 2024 (taux de but reel 7.5%) :
 | Regression logistique | 0.767 | 0.0634 | 0.2330 | 0.087 |
 | Random Forest calibre | 0.741 | 0.0658 | 0.2445 | 0.090 |
 | KNN | 0.654 | 0.0734 | 0.8316 | 0.089 |
+| XGBoost | 0.755 | 0.0642 | 0.2360 | 0.086 |
 
 Sur l'Euro 2024, 98 buts ont ete marques pour 111 attendus selon le xG StatsBomb. L'ecart represente 1.4 ecart-type et n'est donc pas significatif. C'est d'ailleurs une propriete connue du xG : sur un seul tournoi, la reussite devant le but varie beaucoup, et c'est precisement ce qui rend le xG utile sur une saison plutot que sur un match.
 
+### XGBoost contre regression logistique : un ecart dans le bruit
+
+XGBoost (`src/train_xgboost.py`) est le dernier modele ajoute. L'arret precoce se regle sur 15% des matchs du train, pour que le test reste vierge, et s'arrete a 168 arbres. Sur le test, il devance la regression logistique sur les trois metriques. Sur le holdout, c'est l'inverse.
+
+Choisir la regression logistique a cause du holdout reviendrait a utiliser le holdout pour choisir, ce que le decoupage interdit. La decision se prend donc sur le test seul, en verifiant d'abord si l'ecart y depasse le bruit. `src/bootstrap_compare.py` tire 2000 fois les 86 matchs du test avec remise (les tirs d'un meme match ne sont pas independants) et recalcule l'ecart entre les deux modeles sur chaque tirage. Le bootstrap est apparie : les deux modeles sont evalues sur les memes tirs, ce qui annule le bruit qui leur est commun.
+
+| Test (86 matchs) | Ecart XGBoost - logistique | IC 95% | Tirages ou XGBoost est devant |
+|---|---|---|---|
+| AUC (plus haut = mieux) | +0.0025 | [-0.0118, +0.0170] | 64% |
+| Brier (plus bas = mieux) | -0.0015 | [-0.0038, +0.0006] | 91% |
+| LogLoss (plus bas = mieux) | -0.0042 | [-0.0106, +0.0022] | 90% |
+
+Les trois intervalles contiennent zero : sur le test, les deux modeles sont indiscernables, y compris sur le Brier et le LogLoss, les metriques qui comptent pour un xG. La tendance favorise XGBoost sur les probabilites (91% des tirages pour le Brier), mais 86 matchs ne suffisent pas a la confirmer. A modeles indiscernables, on garde le plus simple : la regression logistique, dont les coefficients se lisent directement, la ou il faudrait du SHAP pour expliquer le boosting.
+
+Le holdout ne sert pas a choisir. A titre de constat, il ne contredit pas ce choix : l'ecart y va dans l'autre sens, et ses intervalles contiennent eux aussi zero (AUC [-0.028, +0.004], Brier [-0.0015, +0.0029]).
+
 ## API de scoring (FastAPI)
 
-La regression logistique est exposee via une API FastAPI (`api/main.py`), avec un endpoint `POST /predict` qui prend en entree les caracteristiques geometriques d'un tir et retourne la probabilite de but. C'est le meilleur des trois modeles sur le test comme sur le holdout, et ses probabilites sont deja fideles sans calibration (xG moyen de 0.100 sur le test pour un taux de but du train de 0.101). Une documentation interactive est generee automatiquement par FastAPI sur `/docs`, permettant de tester l'API sans ecrire de code.
+La regression logistique est exposee via une API FastAPI (`api/main.py`), avec un endpoint `POST /predict` qui prend en entree les caracteristiques geometriques d'un tir et retourne la probabilite de but. Elle est statistiquement indiscernable de XGBoost, le meilleur modele sur le test, tout en etant plus simple et lisible (voir le benchmark), et ses probabilites sont deja fideles sans calibration (xG moyen de 0.100 sur le test pour un taux de but du train de 0.101). Une documentation interactive est generee automatiquement par FastAPI sur `/docs`, permettant de tester l'API sans ecrire de code.
 
 **Changement d'interface** : le champ `distance_to_keeper` est remplace par `keeper_off_line`. Les appels ecrits pour la version precedente doivent etre adaptes.
 
 ## Limite assumee du modele
 
 Les features utilisees sont purement geometriques (position du tir, du gardien, des defenseurs). Le modele ne capture rien de la qualite d'execution individuelle du tireur (puissance de frappe, precision, pied fort), une limite connue des modeles xG publics qui n'ont pas acces a des donnees biometriques ou de vitesse de frappe.
+
+## Conclusion
+
+Le projet est clos sur ce resultat : une regression logistique de 24 variables, essentiellement la geometrie du tir, capture 79% de l'amelioration que le xG StatsBomb obtient sur une prediction constante (AUC 0.792 contre 0.828 sur le test), avec des probabilites fideles sans calibration.
+
+- **Le plafond tient aux donnees, pas a l'algorithme.** Quatre familles de modeles (lineaire, Random Forest, KNN, boosting) ont ete essayees. Le meilleur d'entre eux, XGBoost, n'est pas statistiquement distinguable de la regression logistique. L'ecart restant avec StatsBomb vient d'informations non exploitees (passe decisive, face-a-face, deviations), pas d'un modele plus flexible.
+- **Le modele servi est le plus simple qui atteint ce plafond.** Ses coefficients ont un signe footballistique coherent, et un modele d'arbres explique avec SHAP hierarchise les variables geometriques de la meme facon (Spearman 0.90).
+- **La methode a ete tenue.** Decoupage par match, holdout par competition jamais utilise pour choisir, reference triviale calculee sur le train, et ecarts entre modeles juges a l'aune d'un bootstrap par match plutot que sur un chiffre ponctuel.
+- **Le resultat generalise.** Sur l'Euro 2024, une competition jamais vue, l'AUC baisse de 0.792 a 0.767, et celle de StatsBomb de 0.828 a 0.787 : le tournoi est plus dur a predire pour tout le monde, et l'ecart avec StatsBomb ne se creuse pas.
 
 ## Structure du projet
 
@@ -264,6 +291,7 @@ xg-shot-prediction/
 ├── models/
 │   ├── rf_calibrated.pkl        # Random Forest calibre (explique par le notebook)
 │   ├── logistic.pkl             # Regression logistique + scaler (servi par l'API)
+│   ├── xgboost.pkl              # XGBoost (compare a la regression logistique)
 │   └── knn.pkl                  # KNN + scaler (non versionne)
 ├── data/
 │   ├── raw/                     # Tirs et freeze frames extraits
@@ -278,7 +306,9 @@ xg-shot-prediction/
 │   ├── train_logistic.py          # Regression logistique, sauvegarde du modele pour l'API
 │   ├── train_rf.py                # Random Forest, calibration, sauvegarde du modele pour le notebook
 │   ├── train_knn.py
-│   └── benchmark.py               # Comparaison des modeles sauvegardes et du xG StatsBomb
+│   ├── train_xgboost.py           # XGBoost avec arret precoce sur une validation tiree du train
+│   ├── benchmark.py               # Comparaison des modeles sauvegardes et du xG StatsBomb
+│   └── bootstrap_compare.py       # Bootstrap par match de l'ecart XGBoost - regression logistique
 ├── reports/                      # Courbes ROC, coefficients, graphiques SHAP, courbe de calibration
 ├── requirements.txt
 └── README.md
@@ -294,13 +324,17 @@ python src/features.py
 python src/train_logistic.py
 python src/train_rf.py
 python src/train_knn.py
+python src/train_xgboost.py
 python src/benchmark.py
+python src/bootstrap_compare.py
 
 uvicorn api.main:app --reload
 # Documentation interactive disponible sur http://127.0.0.1:8000/docs
 ```
 
-## Prochaines etapes
+## Pistes pour aller plus loin
+
+Le projet est clos. Ces pistes restent ouvertes pour une suite eventuelle :
 
 - Exploiter les informations presentes dans les donnees brutes StatsBomb mais pas encore utilisees, candidates pour expliquer l'ecart avec leur xG :
   - la passe decisive : centre (`pass_cross`), passe en retrait (`pass_cut_back`), hauteur de la passe (`pass_height_name`), via `shot_key_pass_id`
@@ -311,4 +345,4 @@ uvicorn api.main:app --reload
 
 ## Stack technique
 
-Python, Pandas, Scikit-learn, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn, Git
+Python, Pandas, Scikit-learn, XGBoost, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn, Git

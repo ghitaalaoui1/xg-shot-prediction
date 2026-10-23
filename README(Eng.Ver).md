@@ -88,7 +88,7 @@ The `shot_statsbomb_xg` column, provided by StatsBomb, was deliberately excluded
 
 ### Data split
 
-The three training scripts (and the notebook) get their data from a single call to `load_splits` (`src/split.py`), so they all use exactly the same sets:
+The training scripts (and the notebook) get their data from a single call to `load_splits` (`src/split.py`), so they all use exactly the same sets:
 
 | Set | Content | Matches | Shots | Goal rate |
 |---|---|---|---|---|
@@ -212,6 +212,7 @@ For a test shot (distance to goal of 8, angle of 1.2, zero defenders, keeper 5 u
 | Logistic Regression | 0.792 | 0.0812 | 0.2822 |
 | Calibrated Random Forest | 0.783 | 0.0840 | 0.2916 |
 | KNN | 0.739 | 0.0860 | 0.7951 |
+| XGBoost | 0.795 | 0.0796 | 0.2780 |
 
 ### How much of the signal is captured?
 
@@ -223,9 +224,9 @@ Brier:  constant 0.0955  ->  Random Forest 0.0840  ->  StatsBomb 0.0774
 
 The Random Forest captures 64% of the improvement StatsBomb achieves over the trivial baseline, close to two thirds of the signal. Logistic regression captures 79%. These models only have the shot geometry and a few context variables (body part, technique, pressure, type of play), without the richer information available to StatsBomb's model.
 
-The remaining gap (AUC 0.828 versus 0.792) therefore does not come from body part, technique or pressure, which our models already know. It comes from information present in the raw StatsBomb data but not yet used, listed in the next steps.
+The remaining gap (AUC 0.828 versus 0.792) therefore does not come from body part, technique or pressure, which our models already know. It comes from information present in the raw StatsBomb data but not yet used, listed under further work.
 
-Note: on this benchmark, logistic regression beats the Random Forest on all three metrics, and holds up better on the Euro 2024 holdout. It is therefore the model served by the API.
+Note: on this benchmark, logistic regression beats the Random Forest on all three metrics. XGBoost does slightly better than it on the test set (88% of the signal captured), a gap discussed below: it cannot be told apart from noise.
 
 ### The KNN case: good ranking, unusable probabilities
 
@@ -242,18 +243,44 @@ The same benchmark, on the 1304 Euro 2024 shots (actual goal rate 7.5%):
 | Logistic regression | 0.767 | 0.0634 | 0.2330 | 0.087 |
 | Calibrated Random Forest | 0.741 | 0.0658 | 0.2445 | 0.090 |
 | KNN | 0.654 | 0.0734 | 0.8316 | 0.089 |
+| XGBoost | 0.755 | 0.0642 | 0.2360 | 0.086 |
 
 At Euro 2024, 98 goals were scored against 111 expected according to StatsBomb xG. The gap amounts to 1.4 standard deviations and is therefore not significant. This is in fact a well-known property of xG: over a single tournament, finishing varies a lot, which is precisely what makes xG useful over a season rather than over a single match.
 
+### XGBoost versus logistic regression: a gap within the noise
+
+XGBoost (`src/train_xgboost.py`) is the last model added. Early stopping is tuned on 15% of the training matches, so the test set stays untouched, and stops at 168 trees. On the test set it beats logistic regression on all three metrics. On the holdout, it is the other way round.
+
+Choosing logistic regression because of the holdout would mean using the holdout to choose, which the split forbids. The decision is therefore made on the test set alone, by first checking whether the gap there exceeds the noise. `src/bootstrap_compare.py` resamples the 86 test matches 2000 times with replacement (shots from the same match are not independent) and recomputes the gap between the two models on each draw. The bootstrap is paired: both models are scored on the same shots, which cancels out the noise they share.
+
+| Test (86 matches) | Gap XGBoost - logistic | 95% CI | Draws where XGBoost is ahead |
+|---|---|---|---|
+| AUC (higher = better) | +0.0025 | [-0.0118, +0.0170] | 64% |
+| Brier (lower = better) | -0.0015 | [-0.0038, +0.0006] | 91% |
+| LogLoss (lower = better) | -0.0042 | [-0.0106, +0.0022] | 90% |
+
+All three intervals contain zero: on the test set the two models are indistinguishable, including on Brier and LogLoss, the metrics that matter for xG. The trend favours XGBoost on probabilities (91% of draws for Brier), but 86 matches are not enough to confirm it. With indistinguishable models, the simpler one is kept: logistic regression, whose coefficients read directly, where boosting would need SHAP to be explained.
+
+The holdout is not used to choose. As an observation only, it does not contradict the choice: the gap goes the other way there, and its intervals contain zero as well (AUC [-0.028, +0.004], Brier [-0.0015, +0.0029]).
+
 ## Scoring API (FastAPI)
 
-Logistic regression is exposed through a FastAPI application (`api/main.py`), with a `POST /predict` endpoint that takes a shot's geometric characteristics as input and returns the goal probability. It is the best of the three models on both the test set and the holdout, and its probabilities are already faithful without calibration (mean xG of 0.100 on the test set against a training goal rate of 0.101). FastAPI automatically generates interactive documentation at `/docs`, allowing the API to be tested without writing any code.
+Logistic regression is exposed through a FastAPI application (`api/main.py`), with a `POST /predict` endpoint that takes a shot's geometric characteristics as input and returns the goal probability. It is statistically indistinguishable from XGBoost, the best model on the test set, while being simpler and readable (see the benchmark), and its probabilities are already faithful without calibration (mean xG of 0.100 on the test set against a training goal rate of 0.101). FastAPI automatically generates interactive documentation at `/docs`, allowing the API to be tested without writing any code.
 
 **Interface change**: the `distance_to_keeper` field is replaced by `keeper_off_line`. Calls written for the previous version must be updated.
 
 ## Acknowledged limitation of the model
 
 The features used are purely geometric (position of the shot, the keeper, the defenders). The model captures nothing about the shooter's individual execution quality (shot power, accuracy, strong foot), a known limitation of public xG models, which have no access to biometric or shot-speed data.
+
+## Conclusion
+
+The project closes on this result: a 24-variable logistic regression, mostly shot geometry, captures 79% of the improvement StatsBomb xG achieves over a constant prediction (AUC 0.792 versus 0.828 on the test set), with faithful probabilities and no calibration.
+
+- **The ceiling comes from the data, not the algorithm.** Four model families (linear, Random Forest, KNN, boosting) were tried. The best of them, XGBoost, is not statistically distinguishable from logistic regression. The remaining gap with StatsBomb comes from unused information (key pass, one-on-ones, deflections), not from a more flexible model.
+- **The served model is the simplest one that reaches this ceiling.** Its coefficients have football-coherent signs, and a tree model explained with SHAP ranks the geometric variables the same way (Spearman 0.90).
+- **The method held.** Split by match, a holdout by competition never used to choose, a trivial baseline computed on the training set, and gaps between models judged against a match-level bootstrap rather than a single point estimate.
+- **The result generalises.** At Euro 2024, a competition never seen before, AUC drops from 0.792 to 0.767, and StatsBomb's from 0.828 to 0.787: the tournament is harder to predict for everyone, and the gap with StatsBomb does not widen.
 
 ## Project structure
 
@@ -264,6 +291,7 @@ xg-shot-prediction/
 ├── models/
 │   ├── rf_calibrated.pkl        # Calibrated Random Forest (explained by the notebook)
 │   ├── logistic.pkl             # Logistic regression + scaler (served by the API)
+│   ├── xgboost.pkl              # XGBoost (compared with logistic regression)
 │   └── knn.pkl                  # KNN + scaler (not versioned)
 ├── data/
 │   ├── raw/                     # Extracted shots and freeze frames
@@ -278,7 +306,9 @@ xg-shot-prediction/
 │   ├── train_logistic.py          # Logistic regression, saving the model for the API
 │   ├── train_rf.py                # Random Forest, calibration, saving the model for the notebook
 │   ├── train_knn.py
-│   └── benchmark.py               # Comparison of saved models and StatsBomb xG
+│   ├── train_xgboost.py           # XGBoost with early stopping on a validation set drawn from train
+│   ├── benchmark.py               # Comparison of saved models and StatsBomb xG
+│   └── bootstrap_compare.py       # Match-level bootstrap of the XGBoost - logistic regression gap
 ├── reports/                      # ROC curves, coefficients, SHAP plots, calibration curve
 ├── requirements.txt
 └── README.md
@@ -294,13 +324,17 @@ python src/features.py
 python src/train_logistic.py
 python src/train_rf.py
 python src/train_knn.py
+python src/train_xgboost.py
 python src/benchmark.py
+python src/bootstrap_compare.py
 
 uvicorn api.main:app --reload
 # Interactive docs available at http://127.0.0.1:8000/docs
 ```
 
-## Next steps
+## Further work
+
+The project is closed. These leads remain open for any follow-up:
 
 - Use information present in the raw StatsBomb data but not yet exploited, candidates to explain the gap with their xG:
   - the key pass: cross (`pass_cross`), cut-back (`pass_cut_back`), pass height (`pass_height_name`), via `shot_key_pass_id`
@@ -311,4 +345,4 @@ uvicorn api.main:app --reload
 
 ## Tech stack
 
-Python, Pandas, Scikit-learn, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn, Git
+Python, Pandas, Scikit-learn, XGBoost, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn, Git

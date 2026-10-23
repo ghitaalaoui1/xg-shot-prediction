@@ -7,6 +7,7 @@ __pycache__/
 *.joblib
 !models/rf_calibrated.pkl
 !models/logistic.pkl
+!models/xgboost.pkl
 .env
 .vscode/
 .DS_Store
