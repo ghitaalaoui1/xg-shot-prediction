@@ -3,6 +3,8 @@ mplsoccer==1.8.1
 numpy==2.5.3
 pandas==3.0.6
 scikit_learn==1.9.1
+scipy==1.17.1
 shap==0.48.0
 fastapi==0.115.0
 uvicorn==0.32.0
+xgboost==3.4.1

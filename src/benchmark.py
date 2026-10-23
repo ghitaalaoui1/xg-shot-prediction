@@ -15,6 +15,7 @@ MODELS = {
     "Regression logistique": "logistic.pkl",
     "Random Forest calibre": "rf_calibrated.pkl",
     "KNN": "knn.pkl",
+    "XGBoost": "xgboost.pkl",
 }
 
 
