@@ -332,6 +332,8 @@ uvicorn api.main:app --reload
 # Documentation interactive disponible sur http://127.0.0.1:8000/docs
 ```
 
+Les modèles sont sérialisés avec scikit-learn 1.8.0. La version est épinglée dans `requirements.txt` : charger les artefacts avec une autre version produit un avertissement et ne garantit pas des prédictions identiques.
+
 ## Pistes pour aller plus loin
 
 Le projet est clos. Ces pistes restent ouvertes pour une suite eventuelle :
