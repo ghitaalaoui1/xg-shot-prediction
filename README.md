@@ -269,6 +269,14 @@ La regression logistique est exposee via une API FastAPI (`api/main.py`), avec u
 
 **Changement d'interface** : le champ `distance_to_keeper` est remplace par `keeper_off_line`. Les appels ecrits pour la version precedente doivent etre adaptes.
 
+## Interface web (PitchIQ)
+
+Un frontend React + Vite (`xg-shot-frontend/`) permet de construire un scenario de tir a la souris : on place le tir sur la moitie offensive du terrain (coordonnees StatsBomb 120 x 80), on regle le contexte (defenseurs dans l'axe, position du gardien, surface de contact, technique, phase de jeu), et l'interface interroge l'API `POST /predict` pour afficher le xG. Le frontend calcule seulement la distance et l'angle de tir a partir de la position choisie : la prediction vient toujours du modele Python.
+
+![Interface PitchIQ](docs/preview.webp)
+
+![Terrain interactif](docs/pitch.webp)
+
 ## Limite assumee du modele
 
 Les features utilisees sont purement geometriques (position du tir, du gardien, des defenseurs). Le modele ne capture rien de la qualite d'execution individuelle du tireur (puissance de frappe, precision, pied fort), une limite connue des modeles xG publics qui n'ont pas acces a des donnees biometriques ou de vitesse de frappe.
@@ -310,6 +318,8 @@ xg-shot-prediction/
 │   ├── benchmark.py               # Comparaison des modeles sauvegardes et du xG StatsBomb
 │   └── bootstrap_compare.py       # Bootstrap par match de l'ecart XGBoost - regression logistique
 ├── reports/                      # Courbes ROC, coefficients, graphiques SHAP, courbe de calibration
+├── xg-shot-frontend/             # Interface web React + Vite (PitchIQ)
+├── docs/                         # Captures de l'interface
 ├── requirements.txt
 └── README.md
 ```
@@ -332,6 +342,15 @@ uvicorn api.main:app --reload
 # Documentation interactive disponible sur http://127.0.0.1:8000/docs
 ```
 
+Pour l'interface web (Node.js requis), dans un second terminal, l'API restant lancee :
+
+```bash
+cd xg-shot-frontend
+npm install
+npm run dev
+# Interface disponible sur http://localhost:5173
+```
+
 Les modèles sont sérialisés avec scikit-learn 1.8.0. La version est épinglée dans `requirements.txt` : charger les artefacts avec une autre version produit un avertissement et ne garantit pas des prédictions identiques.
 
 ## Pistes pour aller plus loin
@@ -347,4 +366,4 @@ Le projet est clos. Ces pistes restent ouvertes pour une suite eventuelle :
 
 ## Stack technique
 
-Python, Pandas, Scikit-learn, XGBoost, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn, Git
+Python, Pandas, Scikit-learn, XGBoost, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn, React, Vite, Git

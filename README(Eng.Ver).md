@@ -269,6 +269,14 @@ Logistic regression is exposed through a FastAPI application (`api/main.py`), wi
 
 **Interface change**: the `distance_to_keeper` field is replaced by `keeper_off_line`. Calls written for the previous version must be updated.
 
+## Web interface (PitchIQ)
+
+A React + Vite frontend (`xg-shot-frontend/`) lets you build a shot scenario with the mouse: place the shot on the attacking half of the pitch (StatsBomb 120 x 80 coordinates), set the context (defenders in the shooting lane, goalkeeper position, body part, technique, play pattern), and the interface calls the `POST /predict` API to display the xG. The frontend only computes the shot distance and angle from the chosen location: the prediction always comes from the Python model.
+
+![PitchIQ interface](docs/preview.webp)
+
+![Interactive pitch](docs/pitch.webp)
+
 ## Acknowledged limitation of the model
 
 The features used are purely geometric (position of the shot, the keeper, the defenders). The model captures nothing about the shooter's individual execution quality (shot power, accuracy, strong foot), a known limitation of public xG models, which have no access to biometric or shot-speed data.
@@ -310,6 +318,8 @@ xg-shot-prediction/
 │   ├── benchmark.py               # Comparison of saved models and StatsBomb xG
 │   └── bootstrap_compare.py       # Match-level bootstrap of the XGBoost - logistic regression gap
 ├── reports/                      # ROC curves, coefficients, SHAP plots, calibration curve
+├── xg-shot-frontend/             # React + Vite web interface (PitchIQ)
+├── docs/                         # Interface screenshots
 ├── requirements.txt
 └── README.md
 ```
@@ -332,6 +342,15 @@ uvicorn api.main:app --reload
 # Interactive docs available at http://127.0.0.1:8000/docs
 ```
 
+For the web interface (Node.js required), in a second terminal while the API is running:
+
+```bash
+cd xg-shot-frontend
+npm install
+npm run dev
+# Interface available at http://localhost:5173
+```
+
 The models are serialized with scikit-learn 1.8.0. The version is pinned in `requirements.txt`: loading the artifacts with a different version raises a warning and does not guarantee identical predictions.
 
 ## Further work
@@ -347,4 +366,4 @@ The project is closed. These leads remain open for any follow-up:
 
 ## Tech stack
 
-Python, Pandas, Scikit-learn, XGBoost, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn, Git
+Python, Pandas, Scikit-learn, XGBoost, mplsoccer, SHAP, Matplotlib, FastAPI, Uvicorn, React, Vite, Git
